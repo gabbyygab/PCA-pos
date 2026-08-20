@@ -664,6 +664,12 @@ which is exactly what this pass is looking for.
   and `devUrl` at localhost:3000. Building installers needs the Rust toolchain
   installed on the build machine; the packaged app needs only WebView2, which
   Windows 11 already ships.
+- **Tauri compiles the static export into the executable**; it does not copy it
+  beside one. A bundle's `Resources` therefore holds nothing but the icon --
+  `icon.icns` on macOS, `icon.ico` on Windows -- and that is what a *working*
+  build looks like, not a broken one. To check that a build really carries the
+  app, grep the binary for `_next/static` and for the Supabase host, not the
+  Resources directory.
 - The Tauri CSP pins `connect-src` to the project's own Supabase host. **If the
   Supabase project ref ever changes, update the CSP** or every request fails.
 - macOS is configured (`dmg`/`app` targets, `icon.icns`) but has never been
