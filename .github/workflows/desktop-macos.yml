@@ -73,18 +73,31 @@ jobs:
       # embedded at all, and that the Supabase URL was inlined into it, since a
       # build with the secrets missing still succeeds and only fails later, at
       # every login, against `undefined`.
+      #
+      # The executable is named for the **Cargo binary** (`pca-pos`), not for
+      # productName -- the bundler copies `target/<triple>/release/<bin_name>`
+      # into `Contents/MacOS/<bin_name>`, and only the .app directory around it
+      # takes the pretty name. So find whatever is in MacOS/ rather than
+      # guessing at the name, which is what made this step fail on a bundle
+      # that had built correctly.
       - name: Verify the binary carries the web app
         working-directory: web
         env:
           SUPA_HOST: uxdomhpxhcvaqqpryloq.supabase.co
         run: |
           set -euo pipefail
-          BIN="src-tauri/target/universal-apple-darwin/release/bundle/macos/PCA POS.app/Contents/MacOS/PCA POS"
-          if [ ! -f "$BIN" ]; then
-            echo "::error::no executable at $BIN"
-            find src-tauri/target/universal-apple-darwin/release/bundle -maxdepth 4 || true
+          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/PCA POS.app"
+          BIN="$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -perm -u+x | head -1 || true)"
+          if [ -z "$BIN" ]; then
+            echo "::error::no executable inside $APP/Contents/MacOS"
+            find "src-tauri/target/universal-apple-darwin/release/bundle" -maxdepth 4 || true
             exit 1
           fi
+          echo "found executable: $BIN"
+          # A universal build is only universal if lipo actually fused both
+          # slices; a single-arch binary here still runs on the build machine
+          # and would ship broken to the other kind of Mac.
+          lipo -info "$BIN"
           if ! grep -qa "_next/static" "$BIN"; then
             echo "::error::the static export is not embedded in the binary"
             exit 1
