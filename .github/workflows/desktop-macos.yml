@@ -42,9 +42,12 @@ jobs:
         working-directory: web
         run: npm ci
 
-      # `tauri build` runs this itself via beforeBuildCommand; running it as its
-      # own step surfaces a TypeScript failure plainly instead of buried in Rust
-      # output.
+      # Run the export exactly once, here, so a TypeScript failure surfaces
+      # plainly instead of buried in Rust output. `tauri build` would otherwise
+      # run it a second time via beforeBuildCommand, and because `next build`
+      # empties out/ before repopulating it, the bundler can copy an empty
+      # directory — producing a valid .app with no web content in it. The
+      # TAURI_ env override below disables that second run.
       - name: Build web bundle
         working-directory: web
         env:
@@ -57,7 +60,36 @@ jobs:
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-        run: npx tauri build --target universal-apple-darwin --bundles app dmg
+        # The --config override sets beforeBuildCommand to empty, so the export
+        # does not run a second time and out/ is never emptied under the bundler.
+        run: npx tauri build --target universal-apple-darwin --bundles app dmg --config '{"build":{"beforeBuildCommand":""}}'
+
+      # The failure this guards against is silent: Tauri happily bundles an
+      # empty out/ into a valid .app, and the break only shows up as a blank
+      # webview on a Mac, long after CI went green. Fail here instead.
+      - name: Verify the bundle carries the web app
+        working-directory: web
+        env:
+          SUPA_HOST: uxdomhpxhcvaqqpryloq.supabase.co
+        run: |
+          set -euo pipefail
+          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/PCA POS.app"
+          RES="$APP/Contents/Resources"
+          if [ ! -d "$APP" ]; then
+            echo "::error::no .app produced at $APP"
+            exit 1
+          fi
+          if [ ! -f "$RES/index.html" ]; then
+            echo "::error::index.html missing from the bundle - the static export did not ship"
+            echo "Resources contains:"
+            ls -la "$RES" || echo "(no Resources directory at all)"
+            exit 1
+          fi
+          if ! grep -rq "$SUPA_HOST" "$RES/_next"; then
+            echo "::error::the Supabase URL is not baked into the JS - check the repo secrets"
+            exit 1
+          fi
+          echo "bundle OK: index.html present and Supabase URL inlined"
 
       # Unsigned, so macOS quarantines it on download — see the testing guide in
       # CLAUDE.md for the one-line fix the tester runs.
