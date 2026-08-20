@@ -1,0 +1,158 @@
+@import "tailwindcss";
+
+/*
+ * PCA — styled after the shop's price board: near-black ground, one loud red,
+ * italic condensed uppercase headers. Body text stays plainly legible.
+ */
+
+@theme {
+  --color-ink: #0a0a0a;          /* page ground */
+  --color-surface: #131315;      /* panels */
+  --color-surface-2: #1a1a1d;    /* raised panels, hover */
+  --color-line: #26262b;         /* hairlines */
+  --color-line-strong: #34343b;
+  --color-line-focus: #5a5a63; /* focus border: visible, not alarming */
+
+  --color-red: #e11414;          /* the board's red */
+  --color-red-hot: #ff2a2a;      /* hover */
+  --color-red-deep: #a50e0e;     /* pressed */
+
+  --color-chalk: #f5f5f4;        /* primary text */
+  --color-muted: #a1a1a6;        /* secondary text */
+  --color-faint: #6b6b70;        /* tertiary, disabled */
+
+  --color-good: #22c55e;
+  --color-warn: #f59e0b;
+
+  /* Strong custom curves — the CSS built-ins are too weak to feel intentional. */
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-strong: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--color-ink);
+  color: var(--color-chalk);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  /* The POS is a fixed-frame app; the panels scroll, not the page. */
+  overflow: hidden;
+}
+
+/*
+ * Board headers: italic, condensed, uppercase. Tracking is size-specific —
+ * large type reads too loose, so it tightens as it grows.
+ */
+.board-head {
+  font-style: italic;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+.board-label {
+  font-style: italic;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em; /* small text wants positive tracking */
+  line-height: 1.2;
+}
+
+/* Tabular figures keep peso columns from shifting as digits change. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* The angled slash motif from the board. */
+.slant {
+  transform: skewX(-12deg);
+}
+.slant > * {
+  transform: skewX(12deg);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 999px;
+  border: 3px solid var(--color-ink);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #45454d;
+}
+
+/* Focused controls are marked by their own border (see ui/Input, ui/Select).
+   This is the fallback for anything that draws no focus style of its own —
+   neutral, because red reads as an error on a form field. */
+:focus-visible {
+  outline: 1px solid var(--color-line-focus);
+  outline-offset: 2px;
+}
+
+/* Fields opt out entirely: their shell already carries the focus border, and a
+   second outline on the inner element renders as a doubled box. */
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
+
+/*
+ * The boot bar sweeps its own width across the track and back. Transform only,
+ * so the compositor carries it while the main thread is busy hydrating the
+ * session and firing the first queries — which is exactly when it is on screen.
+ */
+@keyframes boot-bar {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+.boot-bar {
+  animation: boot-bar 1.1s var(--ease-in-out-strong) infinite;
+}
+
+/*
+ * Reduced motion kills the sweep along with everything else (the rule below
+ * clamps every animation to 0.01ms), which would leave the bar parked off the
+ * left edge of an empty track. Pin it in view and let it pulse instead.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .boot-bar {
+    transform: translateX(100%);
+    animation: none !important;
+    opacity: 0.6;
+  }
+}
+
+/* Reduced motion means gentler, not none: keep opacity, drop movement. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
