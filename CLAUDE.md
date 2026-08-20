@@ -11,7 +11,7 @@ Two clients, one Supabase Postgres database:
 | Client | Status | Users | Purpose |
 | --- | --- | --- | --- |
 | `web/` | scaffolded, being built now | Owner / admin | Desktop app (Tauri): POS, payroll, reports, service & price management |
-| `mobile/` | built: POS + service record | Cashiers | Expo app: ring up sales, mark work done/refunded; no reports |
+| `mobile/` | built: POS + service record + expenses | Cashiers | Expo app: ring up sales, mark work done/refunded, record the day's costs; no reports |
 
 The desktop app is **not deployed to a public host**. It ships as a native
 Tauri app: Next.js is statically exported (`output: 'export'`) and the bundle is
@@ -65,9 +65,9 @@ because the cashier app computes the same totals.
 
 ### The cashier app
 
-`mobile/` is ringing up sales and recording the work — there is no payroll,
-reports, or settings screen to reach, and the restriction is structural rather
-than a UI check. RLS is the real boundary: both clients ship the same anon key
+`mobile/` is ringing up sales, recording the work, and logging the day's costs
+— there is no payroll, reports, or settings screen to reach, and the restriction
+is structural rather than a UI check. RLS is the real boundary: both clients ship the same anon key
 to the device, so what stops a cashier reading payroll is their JWT, never this
 bundle's lack of a screen.
 
@@ -359,8 +359,20 @@ Expense names are free text on purpose — the owner types whatever the receipt
 says. The add dialog offers previously used names as one-tap fills so
 "Electricity" does not become three spellings that report as three lines.
 
-RLS is owner-only in every direction, matching `payroll_adjustments`: a cashier
-rings up sales, and what the shop spends is neither theirs to read nor to write.
+RLS is **asymmetric**, and deliberately not the owner-only shape
+`payroll_adjustments` uses. The cashier is who is standing at the counter when
+the soap is bought, so **insert is open to any signed-in user** — an expense
+only the owner can record is one that gets typed in late or not at all, and a
+missing cost is what makes net sales wrong. **Reading stops at the Manila day in
+progress** (`is_owner() or spent_on = today`), mirroring `sales_read`: enough
+for the cashier to see what they just typed and not enter soap twice, not enough
+to read the shop's spending history off a phone at the counter. **Update and
+delete stay owner-only** — a cashier who mistypes tells the owner, which leaves
+the correction visible instead of letting the device that typed a row rewrite
+it. See `supabase/migrations/20260820_cashier_expenses.sql`.
+
+The cashier app has an **Expenses screen** (its third tab) that is insert plus
+today's sheet only: no history, no edit, no delete, matching what RLS grants.
 
 ### Payroll period
 
@@ -426,6 +438,11 @@ A single tabbed shell, not separate routes-with-reloads. Tabs:
 7. **Price Board** (`settings/`) — edit services, prices per size, package
    inclusions, commission rates; add new services and packages. Labelled for
    what it edits, since "Services" is now the record of work done.
+8. **Accounts** (`accounts/`) — **owner-only**, hidden from the sidebar for
+   anyone else. The two sign-ins and their passwords: the owner changes their
+   own (re-entering the current one first) and sets the cashier's without
+   knowing the old one. Kept out of the Price Board because that tab is about
+   what the shop charges, not who can sign in.
 
 ## Stack
 
@@ -614,6 +631,22 @@ which is exactly what this pass is looking for.
   (`pca.payroll.pos@gmail.com`, `role: owner`) and the cashier
   (`cashier@pca.com` / `PCA2026!`, `role: cashier`), both email-confirmed.
   A new user gets its role by setting `app_metadata.role` in Supabase Auth.
+- Passwords are changed in the **Accounts** tab, by two different mechanisms.
+  The owner's own password goes through `auth.updateUser`, which acts on the
+  caller's own token; the app re-checks the current password first, because the
+  desktop sits unattended at the counter all day (the same argument as
+  `ownerGate`). The **cashier's** password cannot work that way — changing
+  another user's password is an admin operation, and the Admin API needs the
+  service-role key, which bypasses RLS and so **can never ship in a client
+  bundle**. That privilege lives in Postgres instead:
+  `set_account_password` is `security definer`, owner-only, bcrypts the new
+  password with `pgcrypto`, and **refuses to touch an owner account** — so it
+  can only ever write a subordinate account, never grant its caller anything.
+  It also deletes that user's refresh tokens, signing the cashier's phone out
+  rather than leaving it running on a password that no longer exists.
+  `list_accounts` exists because `auth.users` is not exposed through PostgREST;
+  it returns id/email/role only, never password material.
+  See `supabase/migrations/20260820_account_passwords.sql`.
 - `create_sale` is **`security definer`**. It has to be: the function ends by
   writing the summed totals back onto the `sales` row, and `sales` has an
   owner-only UPDATE policy, so as the caller that write silently matched no

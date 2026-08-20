@@ -10,19 +10,20 @@ export const attentionKey = ['attention'] as const
 export interface DayAttention {
   /** Lines still to be worked — the count the crew burns down. */
   pending: number
-  /** Lines given back today. Money already left the till. */
-  refunded: number
-  /** pending + refunded: everything on the Services tab wanting a look. */
-  total: number
   /** Newest line's timestamp, used to decide whether anything is unseen. */
   latestAt: string | null
 }
 
 /**
- * What the Services tab would show as needing attention today.
+ * What the Services tab would show as still needing work today.
+ *
+ * Only `pending` counts. A refund is already settled — the money went back and
+ * nobody has to do anything — so putting it in the badge left a number the crew
+ * could not burn down. The refunded lines are still flagged on the Services tab
+ * itself, where the ticket they belong to is visible.
  *
  * Counted server-side with `head: true` rather than by loading the day's
- * tickets: the sidebar renders on every tab, and it only needs three numbers.
+ * tickets: the sidebar renders on every tab, and it only needs two numbers.
  * A cashier's RLS reaches only today, which is exactly this window, so the
  * badge shows them the same figure the tab will.
  */
@@ -41,22 +42,16 @@ export function useDayAttention() {
       const end = new Date(start)
       end.setDate(end.getDate() + 1)
 
-      // `sale_items` carries no timestamp of its own that is filterable here,
-      // so the window is applied through the parent sale.
-      const range = (q: ReturnType<typeof baseQuery>) =>
-        q
-          .gte('sales.sold_at', start.toISOString())
-          .lt('sales.sold_at', end.toISOString())
-
-      function baseQuery() {
-        return supabase
+      const [pendingRes, latestRes] = await Promise.all([
+        // `sale_items` carries no timestamp of its own that is filterable here,
+        // so the window is applied through the parent sale.
+        supabase
           .from('sale_items')
           .select('id, sales!inner(sold_at, voided_at)', { count: 'exact', head: true })
-      }
-
-      const [pendingRes, refundedRes, latestRes] = await Promise.all([
-        range(baseQuery()).eq('status', 'pending').is('sales.voided_at', null),
-        range(baseQuery()).eq('status', 'refunded').is('sales.voided_at', null),
+          .gte('sales.sold_at', start.toISOString())
+          .lt('sales.sold_at', end.toISOString())
+          .eq('status', 'pending')
+          .is('sales.voided_at', null),
         supabase
           .from('sale_items')
           .select('created_at, sales!inner(sold_at, voided_at)')
@@ -68,17 +63,12 @@ export function useDayAttention() {
       ])
 
       if (pendingRes.error) throw pendingRes.error
-      if (refundedRes.error) throw refundedRes.error
       if (latestRes.error) throw latestRes.error
 
-      const pending = pendingRes.count ?? 0
-      const refunded = refundedRes.count ?? 0
       const latest = (latestRes.data ?? [])[0] as { created_at: string } | undefined
 
       return {
-        pending,
-        refunded,
-        total: pending + refunded,
+        pending: pendingRes.count ?? 0,
         latestAt: latest?.created_at ?? null,
       }
     },

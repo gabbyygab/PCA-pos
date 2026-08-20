@@ -9,6 +9,7 @@ import {
   ClipboardList,
   Receipt,
   Settings2,
+  ShieldCheck,
   ShoppingCart,
   Users,
   type LucideIcon,
@@ -22,6 +23,7 @@ import { ReportsTab } from '@/components/reports/ReportsTab'
 import { EmployeesTab } from '@/components/employees/EmployeesTab'
 import { ExpensesTab } from '@/components/expenses/ExpensesTab'
 import { SettingsTab } from '@/components/settings/SettingsTab'
+import { AccountsTab } from '@/components/accounts/AccountsTab'
 import { ConfirmModal } from '@/components/ui/Modal'
 import { Badge, formatBadgeCount } from '@/components/ui/Badge'
 import { useDayAttention, useSeenMarker } from '@/lib/queries/attention'
@@ -34,8 +36,9 @@ type TabId =
   | 'reports'
   | 'employees'
   | 'settings'
+  | 'accounts'
 
-const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
+const TABS: { id: TabId; label: string; icon: LucideIcon; ownerOnly?: boolean }[] = [
   { id: 'pos', label: 'POS', icon: ShoppingCart },
   // Directly after POS: a sale is rung up, then worked. This is the screen the
   // crew returns to all day to close lines out.
@@ -49,6 +52,9 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   // Labelled for what it edits — the price board — since "Services" is now the
   // record of work done.
   { id: 'settings', label: 'Price Board', icon: Settings2 },
+  // Last, and owner-only: the sign-in credentials themselves. A cashier has
+  // no business here, and `list_accounts` would refuse them anyway.
+  { id: 'accounts', label: 'Accounts', icon: ShieldCheck, ownerOnly: true },
 ]
 
 export function Shell() {
@@ -56,11 +62,13 @@ export function Shell() {
   const [confirmingSignOut, setConfirmingSignOut] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
   const { email, isOwner, signOut } = useSession()
+  const tabs = TABS.filter((t) => !t.ownerOnly || isOwner)
 
-  // One badge, two signals: the number is today's open work (still pending,
-  // plus anything given back), and the dot means some of it landed since this
-  // device last opened the tab. The count outlives a glance — it only falls
-  // when the crew actually closes a line — while the dot clears on visit.
+  // One badge, two signals: the number is today's unfinished work, and the dot
+  // means some of it landed since this device last opened the tab. The count
+  // outlives a glance — it only falls when the crew actually marks a line done
+  // — while the dot clears on visit. Refunds are deliberately not counted:
+  // there is nothing left to do about one, so it could never be burned down.
   const { data: attention } = useDayAttention()
   const { hasUnseen, markSeen } = useSeenMarker(attention?.latestAt ?? null)
 
@@ -106,7 +114,7 @@ export function Shell() {
         </div>
 
         <div className="flex flex-1 flex-col gap-1 px-2">
-          {TABS.map((t) => {
+          {tabs.map((t) => {
             const active = t.id === tab
             const Icon = t.icon
             return (
@@ -131,12 +139,9 @@ export function Shell() {
                 />
                 <Icon size={17} className={active ? 'text-red' : ''} />
                 <span className="board-label flex-1 text-[11px]">{t.label}</span>
-                {t.id === 'services' && attention && attention.total > 0 ? (
-                  <Badge
-                    dot={hasUnseen}
-                    label={`${attention.pending} pending, ${attention.refunded} refunded today`}
-                  >
-                    {formatBadgeCount(attention.total)}
+                {t.id === 'services' && attention && attention.pending > 0 ? (
+                  <Badge dot={hasUnseen} label={`${attention.pending} services still to do today`}>
+                    {formatBadgeCount(attention.pending)}
                   </Badge>
                 ) : null}
               </button>
@@ -173,6 +178,7 @@ export function Shell() {
         {tab === 'reports' && <ReportsTab />}
         {tab === 'employees' && <EmployeesTab />}
         {tab === 'settings' && <SettingsTab />}
+        {tab === 'accounts' && <AccountsTab />}
       </main>
 
       {confirmingSignOut ? (

@@ -51,7 +51,7 @@ export function useUpdateEmployee() {
 /**
  * Permanently remove an employee.
  *
- * Only ever succeeds for someone who never worked a car. Every table that
+ * Only ever succeeds for someone with no history at all. Every table that
  * references `employees` does so with RESTRICT / NO ACTION, because deleting a
  * name out from under a sale would orphan revenue history and any finalized
  * payslip that already paid them. Archiving is the tool for someone who left;
@@ -64,10 +64,12 @@ export function useDeleteEmployee() {
       const supabase = createClient()
       const { error } = await supabase.from('employees').delete().eq('id', id)
       if (error) {
-        // 23503 is foreign_key_violation: they are on a sale after all.
+        // 23503 is foreign_key_violation: a sale, payslip, or adjustment still
+        // points at them. The pre-check catches this first in the normal case;
+        // this covers a row that landed between the check and the delete.
         if (error.code === '23503') {
           throw new Error(
-            'This employee is on recorded sales, so their history cannot be deleted. Archive them instead.'
+            'This employee has recorded sales or payroll history, which cannot be deleted. Archive them instead.'
           )
         }
         throw error
@@ -78,22 +80,57 @@ export function useDeleteEmployee() {
 }
 
 /**
- * Whether an employee can be deleted at all — i.e. has no sale credited to
- * them. Lets the UI say so up front instead of offering a button that always
- * fails.
+ * Every table that points at `employees`, each with the phrase the UI uses to
+ * say what is holding the row down.
+ *
+ * All five constraints are RESTRICT / NO ACTION in Postgres, so any one of them
+ * refuses the delete. Checking only `sale_item_commissions` used to let someone
+ * with a payslip or an adjustment — but no commission row, which is what a
+ * finalized week of pure adjustments looks like — reach a Delete button that
+ * then failed with a raw foreign-key error.
+ */
+const EMPLOYEE_REFERENCES = [
+  { table: 'sale_item_commissions', noun: 'commission on a sale' },
+  { table: 'sales', noun: 'sale' },
+  { table: 'sale_items', noun: 'service line' },
+  { table: 'payroll_slips', noun: 'payslip' },
+  { table: 'payroll_adjustments', noun: 'payroll adjustment' },
+] as const
+
+export interface EmployeeDeletable {
+  deletable: boolean
+  /** What is holding them down, phrased for the confirm dialog. */
+  blockedBy: string[]
+}
+
+/**
+ * Whether an employee can be deleted at all — i.e. nothing references them.
+ * Lets the UI say so up front, and say *why*, instead of offering a button that
+ * always fails.
  */
 export function useEmployeeDeletable(employeeId: string | null) {
   return useQuery({
     queryKey: [...employeesKey, 'deletable', employeeId],
     enabled: employeeId !== null,
-    queryFn: async (): Promise<boolean> => {
+    queryFn: async (): Promise<EmployeeDeletable> => {
       const supabase = createClient()
-      const { count, error } = await supabase
-        .from('sale_item_commissions')
-        .select('sale_id', { count: 'exact', head: true })
-        .eq('employee_id', employeeId!)
-      if (error) throw error
-      return (count ?? 0) === 0
+
+      const results = await Promise.all(
+        EMPLOYEE_REFERENCES.map(async ({ table, noun }) => {
+          const { count, error } = await supabase
+            .from(table)
+            .select('employee_id', { count: 'exact', head: true })
+            .eq('employee_id', employeeId!)
+          if (error) throw error
+          return { noun, count: count ?? 0 }
+        })
+      )
+
+      const blockedBy = results
+        .filter((r) => r.count > 0)
+        .map((r) => (r.count === 1 ? `1 ${r.noun}` : `${r.count} ${r.noun}s`))
+
+      return { deletable: blockedBy.length === 0, blockedBy }
     },
   })
 }

@@ -576,7 +576,20 @@ export type Database = {
         Returns: string
       }
       is_owner: { Args: never; Returns: boolean }
+      list_accounts: {
+        Args: never
+        Returns: {
+          email: string
+          id: string
+          is_self: boolean
+          role: string
+        }[]
+      }
       recalc_sale_totals: { Args: { p_sale_id: string }; Returns: undefined }
+      set_account_password: {
+        Args: { p_new_password: string; p_user_id: string }
+        Returns: undefined
+      }
       set_service_status: {
         Args: {
           p_sale_item_id: string

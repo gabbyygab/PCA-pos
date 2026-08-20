@@ -29,6 +29,7 @@ export function EmployeesTab() {
   const update = useUpdateEmployee()
   const remove = useDeleteEmployee()
   const { data: deletable } = useEmployeeDeletable(deleting?.id ?? null)
+  const blocked = deletable !== undefined && !deletable.deletable
   const { toast } = useToast()
 
   // Resolved from the live list, so renaming or deactivating someone updates
@@ -76,7 +77,7 @@ export function EmployeesTab() {
   }
 
   async function confirmDelete() {
-    if (!deleting) return
+    if (!deleting || blocked) return
     const name = deleting.name
     try {
       await remove.mutateAsync(deleting.id)
@@ -220,20 +221,28 @@ export function EmployeesTab() {
         <ConfirmModal
           title={`Delete ${deleting.name}?`}
           hint={
-            deletable === false
-              ? 'This employee is credited on recorded sales, so deleting them would orphan that history. Leave them archived instead.'
+            blocked
+              ? 'This employee has history tied to them, so deleting them would orphan it. Leave them archived instead — their name keeps printing on every past ticket and payslip.'
               : 'Permanent. Use this only for a row added by mistake — archiving is what keeps a former employee’s history intact.'
           }
           confirmLabel="Delete permanently"
           destructive
-          busy={remove.isPending || deletable === undefined}
+          // Blocked is a dead end, not a slow path: the database will refuse it,
+          // so the button never fires rather than failing into a toast.
+          busy={remove.isPending || deletable === undefined || blocked}
           onConfirm={confirmDelete}
           onClose={() => setDeleting(null)}
         >
-          {deletable === false ? (
-            <p className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-xs text-chalk">
-              Deletion will be refused by the database. Cancel and keep them archived.
-            </p>
+          {blocked ? (
+            <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-xs text-chalk">
+              <p className="font-semibold">Tied to:</p>
+              <ul className="mt-1 list-inside list-disc text-muted">
+                {deletable.blockedBy.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+              <p className="mt-2 text-muted">Cancel and keep them archived.</p>
+            </div>
           ) : null}
         </ConfirmModal>
       ) : null}

@@ -7,6 +7,7 @@ import { useKeyboard } from '@/lib/keyboard/useKeyboard'
 import { SessionProvider, useSession } from '@/lib/auth/session'
 import { BootScreen } from '@/screens/BootScreen'
 import { LoginScreen } from '@/screens/LoginScreen'
+import { ExpensesScreen } from '@/screens/ExpensesScreen'
 import { PosScreen } from '@/screens/PosScreen'
 import { ServicesScreen } from '@/screens/ServicesScreen'
 import { boardLabel, colors, space, TAP } from '@/theme'
@@ -19,10 +20,16 @@ import { boardLabel, colors, space, TAP } from '@/theme'
  * boundary underneath: the same anon key ships on every device, so a cashier's
  * JWT is what stops payroll being read, not this bundle's lack of a screen.
  *
- * Two screens now, so there is a switch between them. It is a plain pair of
- * buttons rather than a navigation library: with two destinations and no deep
- * linking or history to model, a navigator would be a dependency and a bundle
- * cost for a boolean.
+ * Expenses is here because the cashier is who is standing at the counter when
+ * the soap is bought — an expense only the owner can record is one that gets
+ * typed in late or not at all, and a missing cost is what makes net sales
+ * wrong. RLS gives them insert plus the Manila day in progress, so the screen
+ * is a working sheet, not the ledger: no history, no edit, no delete.
+ *
+ * Three screens now, so there is a switch between them. It is still a plain row
+ * of buttons rather than a navigation library: with a handful of destinations
+ * and no deep linking or history to model, a navigator would be a dependency
+ * and a bundle cost for an enum.
  */
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,7 +42,7 @@ const queryClient = new QueryClient({
   },
 })
 
-type Tab = 'pos' | 'services'
+type Tab = 'pos' | 'services' | 'expenses'
 
 function Root() {
   const { session, loading } = useSession()
@@ -71,6 +78,12 @@ function Root() {
       >
         <ServicesScreen />
       </View>
+      <View
+        style={[styles.screen, bottomGap, tab !== 'expenses' && styles.hidden]}
+        pointerEvents={tab === 'expenses' ? 'auto' : 'none'}
+      >
+        <ExpensesScreen />
+      </View>
       <TabBar tab={tab} onChange={setTab} />
     </View>
   )
@@ -98,6 +111,11 @@ function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
         label="Services"
         active={tab === 'services'}
         onPress={() => onChange('services')}
+      />
+      <TabButton
+        label="Expenses"
+        active={tab === 'expenses'}
+        onPress={() => onChange('expenses')}
       />
     </View>
   )

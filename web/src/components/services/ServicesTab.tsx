@@ -1,7 +1,15 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { CheckCircle2, ChevronLeft, ChevronRight, Clock, Search, Undo2 } from 'lucide-react'
+import {
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  RotateCcw,
+  Search,
+  Undo2,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSession } from '@/lib/auth/session'
 import { Panel, PanelHeader, SlashRule } from '@/components/ui/Panel'
@@ -59,6 +67,9 @@ export function ServicesTab() {
     return rows
       .map((ticket) => ({
         ...ticket,
+        // Kept off the filtered list: the card's refund badge must still show
+        // while the view is narrowed to "In progress".
+        refundedCount: ticket.items.filter((i) => i.status === 'refunded').length,
         items: ticket.items.filter((i) => filter === 'all' || i.status === filter),
       }))
       .filter((ticket) => {
@@ -212,6 +223,7 @@ export function ServicesTab() {
               <TicketCard
                 key={ticket.id}
                 ticket={ticket}
+                refundedCount={ticket.refundedCount}
                 busy={setStatus.isPending}
                 onSet={apply}
                 onRefund={(line) => setRefunding({ line, ticket })}
@@ -243,11 +255,14 @@ export function ServicesTab() {
 
 function TicketCard({
   ticket,
+  refundedCount,
   busy,
   onSet,
   onRefund,
 }: {
   ticket: ServiceTicket
+  /** Off the whole ticket, not the filtered view — see `tickets` above. */
+  refundedCount: number
   busy: boolean
   onSet: (line: ServiceLine, status: ServiceStatus) => void
   onRefund: (line: ServiceLine) => void
@@ -271,13 +286,21 @@ function TicketCard({
             .join(' · ') || undefined
         }
         action={
-          <div className="text-right">
-            <p className="text-sm font-bold tabular-nums text-chalk">
-              {formatPeso(ticket.total_centavos)}
-            </p>
-            {voided ? (
-              <p className="board-label text-[10px] text-red">Voided</p>
+          <div className="flex items-center gap-2">
+            {/* The struck-through line is easy to miss on a long ticket, so the
+                card says up front that money came back off it. */}
+            {refundedCount > 0 ? (
+              <span className="board-label flex items-center gap-1 rounded-full border border-red/40 bg-red/10 px-2 py-1 text-[10px] text-red">
+                <RotateCcw size={10} />
+                {refundedCount} refunded
+              </span>
             ) : null}
+            <div className="text-right">
+              <p className="text-sm font-bold tabular-nums text-chalk">
+                {formatPeso(ticket.total_centavos)}
+              </p>
+              {voided ? <p className="board-label text-[10px] text-red">Voided</p> : null}
+            </div>
           </div>
         }
       />
@@ -364,14 +387,24 @@ function LineRow({
 }
 
 function StatusPill({ status }: { status: ServiceStatus }) {
-  const tone =
-    status === 'done'
-      ? 'text-emerald-400'
-      : status === 'refunded'
-        ? 'text-red'
-        : 'text-amber-400'
+  // Refunded is the one status that changes what the ticket is worth, so it
+  // gets a filled badge; done and pending stay quiet text on their own line.
+  if (status === 'refunded') {
+    return (
+      <span className="board-label mt-1 inline-flex items-center gap-1 rounded-full border border-red/40 bg-red/10 px-2 py-0.5 text-[10px] text-red">
+        <RotateCcw size={10} />
+        {SERVICE_STATUS_LABELS.refunded}
+      </span>
+    )
+  }
+
   return (
-    <span className={cn('board-label mt-0.5 flex items-center gap-1 text-[10px]', tone)}>
+    <span
+      className={cn(
+        'board-label mt-0.5 flex items-center gap-1 text-[10px]',
+        status === 'done' ? 'text-emerald-400' : 'text-amber-400'
+      )}
+    >
       {status === 'pending' ? <Clock size={10} /> : null}
       {SERVICE_STATUS_LABELS[status]}
     </span>
