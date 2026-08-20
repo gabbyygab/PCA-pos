@@ -42,12 +42,9 @@ jobs:
         working-directory: web
         run: npm ci
 
-      # Run the export exactly once, here, so a TypeScript failure surfaces
-      # plainly instead of buried in Rust output. `tauri build` would otherwise
-      # run it a second time via beforeBuildCommand, and because `next build`
-      # empties out/ before repopulating it, the bundler can copy an empty
-      # directory — producing a valid .app with no web content in it. The
-      # TAURI_ env override below disables that second run.
+      # `tauri build` runs this again itself via beforeBuildCommand; running it
+      # as its own step surfaces a TypeScript failure plainly instead of buried
+      # in Rust output.
       - name: Build web bundle
         working-directory: web
         env:
@@ -60,9 +57,12 @@ jobs:
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-        # The --config override sets beforeBuildCommand to empty, so the export
-        # does not run a second time and out/ is never emptied under the bundler.
-        run: npx tauri build --target universal-apple-darwin --bundles app dmg --config '{"build":{"beforeBuildCommand":""}}'
+        # No --config override here: overriding `build` replaces the whole
+        # object, which drops frontendDist and makes Tauri bundle no web
+        # content. Let tauri.conf.json drive the build, exactly as the working
+        # Windows builds do. beforeBuildCommand re-runs the export, which is
+        # redundant with the step above but harmless.
+        run: npx tauri build --target universal-apple-darwin --bundles app dmg
 
       # The failure this guards against is silent: Tauri happily bundles an
       # empty out/ into a valid .app, and the break only shows up as a blank
