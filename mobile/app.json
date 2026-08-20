@@ -2,7 +2,7 @@
   "expo": {
     "name": "PCA Cashier",
     "slug": "pca-cashier",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "pcacashier",
@@ -21,6 +21,7 @@
     },
     "android": {
       "package": "ph.pca.cashier",
+      "versionCode": 2,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0A0A0A"
