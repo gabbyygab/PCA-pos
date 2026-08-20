@@ -16,6 +16,10 @@ import { ConfirmModal } from '@/components/ConfirmModal'
 import { useKeyboard } from '@/lib/keyboard/useKeyboard'
 import { CrewSheet } from '@/components/CrewSheet'
 import { OpenPriceSheet } from '@/components/OpenPriceSheet'
+import {
+  CustomServiceSheet,
+  type CustomServiceDraft,
+} from '@/components/CustomServiceSheet'
 import { ServiceCard } from '@/components/ServiceCard'
 import { ServiceGridSkeleton } from '@/components/Skeleton'
 import { useCatalog, useVehicleSizes, type CatalogService } from '@/lib/queries/catalog'
@@ -26,6 +30,7 @@ import { formatPeso } from '@shared/lib/currency'
 import {
   CATEGORY_LABELS,
   CATEGORY_ORDER,
+  DEFAULT_COMMISSION_BP,
   sizesForClass,
   VEHICLE_CLASS_LABELS,
   VEHICLE_CLASSES,
@@ -34,7 +39,14 @@ import {
   type VehicleClass,
   type VehicleSizeRow,
 } from '@shared/lib/domain'
-import { cartTotal, isAvailableAtSize, resolvePrice, type CartLine } from '@shared/lib/pricing'
+import {
+  cartTotal,
+  isAvailableAtSize,
+  isCustomLine,
+  newCustomLineId,
+  resolvePrice,
+  type CartLine,
+} from '@shared/lib/pricing'
 import { colors, boardHead, boardLabel, radius, TAP } from '@/theme'
 
 /**
@@ -54,6 +66,7 @@ export function PosScreen() {
   const [payment, setPayment] = useState<PaymentMethod>('cash')
   const [plate, setPlate] = useState('')
   const [openPriceFor, setOpenPriceFor] = useState<CatalogService | null>(null)
+  const [customOpen, setCustomOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<ServiceCategory | 'all'>('all')
   const [cartOpen, setCartOpen] = useState(false)
@@ -153,6 +166,9 @@ export function PosScreen() {
     // Prices are per size; re-price what is still offered and drop the rest.
     setLines((prev) =>
       prev.flatMap((line) => {
+        // A custom line has no catalogue price to re-resolve; it keeps the
+        // amount the cashier agreed regardless of the size selected.
+        if (isCustomLine(line)) return [line]
         const service = services.find((s) => s.id === line.serviceId)
         if (!service) return []
         if (service.is_open_price) return [line]
@@ -208,6 +224,26 @@ export function PosScreen() {
       },
     ])
     setOpenPriceFor(null)
+  }
+
+  function confirmCustom(draft: CustomServiceDraft) {
+    setLines((prev) => [
+      ...prev,
+      {
+        // A fresh key every time: two custom lines on one ticket are two
+        // different jobs and must not merge the way a repeated tile does.
+        serviceId: newCustomLineId(),
+        serviceName: draft.name,
+        description: draft.description || undefined,
+        category: draft.category,
+        quantity: 1,
+        unitPriceCentavos: draft.centavos,
+        commissionRateBp: DEFAULT_COMMISSION_BP[draft.category],
+      },
+    ])
+    setCustomOpen(false)
+    setCartOpen(true)
+    note(`Added ${draft.name}`)
   }
 
   function reset() {
@@ -351,6 +387,22 @@ export function PosScreen() {
               </Text>
             </Pressable>
           )}
+          /*
+            Work that is not on the board and is not worth adding to it. It
+            rides the filter row rather than the grid because it is not a
+            service the shop offers — it is an escape hatch, and a tile among
+            the real ones would be mistaken for one.
+          */
+          ListFooterComponent={
+            <Pressable
+              onPress={() => setCustomOpen(true)}
+              style={styles.customCat}
+              accessibilityRole="button"
+              accessibilityLabel="Add a custom service"
+            >
+              <Text style={styles.customCatText}>+ Custom</Text>
+            </Pressable>
+          }
         />
       </View>
 
@@ -508,6 +560,12 @@ export function PosScreen() {
         onClose={() => setCrewOpen(false)}
       />
 
+      <CustomServiceSheet
+        visible={customOpen}
+        onCancel={() => setCustomOpen(false)}
+        onConfirm={confirmCustom}
+      />
+
       <OpenPriceSheet
         serviceName={openPriceFor?.name ?? null}
         onCancel={() => setOpenPriceFor(null)}
@@ -602,6 +660,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   catOn: { borderColor: colors.red, backgroundColor: 'rgba(225,20,20,0.12)' },
+  customCat: {
+    minHeight: 38,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.lineStrong,
+    backgroundColor: colors.surface,
+  },
+  customCatText: { color: colors.chalk, fontSize: 12, fontWeight: '700' },
   catText: { color: colors.muted, fontSize: 12, fontWeight: '700' },
   catTextOn: { color: colors.chalk },
   center: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24 },

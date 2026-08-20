@@ -100,9 +100,17 @@ export function CartSheet({
           lines.map((line) => (
             <View key={line.serviceId} style={styles.line}>
               <View style={styles.lineTop}>
-                <Text style={styles.lineName} numberOfLines={2}>
-                  {line.serviceName}
-                </Text>
+                <View style={styles.lineNameWrap}>
+                  <Text style={styles.lineName} numberOfLines={2}>
+                    {line.serviceName}
+                  </Text>
+                  {/* Custom lines carry a typed note; it prints with the name. */}
+                  {line.description ? (
+                    <Text style={styles.lineNote} numberOfLines={2}>
+                      {line.description}
+                    </Text>
+                  ) : null}
+                </View>
                 <Text style={styles.lineTotal}>{formatPeso(lineTotal(line))}</Text>
               </View>
 
@@ -237,7 +245,11 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   lineTop: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
-  lineName: { color: colors.chalk, fontSize: 14, fontWeight: '700', flex: 1 },
+  // The flex sits on the wrapper, not the name, so a two-line note stays
+  // inside the same column as the name rather than shoving the total off.
+  lineNameWrap: { flex: 1 },
+  lineName: { color: colors.chalk, fontSize: 14, fontWeight: '700' },
+  lineNote: { color: colors.faint, fontSize: 11, marginTop: 2 },
   lineTotal: { color: colors.chalk, fontSize: 15, fontWeight: '800' },
   lineBottom: {
     flexDirection: 'row',

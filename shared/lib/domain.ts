@@ -79,6 +79,21 @@ export function countsAsRevenue(status: ServiceStatus): boolean {
   return status !== 'refunded'
 }
 
+/**
+ * The name a one-off "custom service" line stores on the sale.
+ *
+ * `sale_items` snapshots a plain `service_name` and has no description column,
+ * and adding one would mean a migration plus a new field in every report that
+ * lists a line. The note is folded into the name instead, which is the same
+ * text a receipt would print anyway — and it keeps the rule in one place so
+ * the dashboard and the cashier app store the identical string.
+ */
+export function customServiceName(name: string, description?: string | null): string {
+  const label = name.trim()
+  const note = (description ?? '').trim()
+  return note ? `${label} — ${note}` : label
+}
+
 export const VEHICLE_CLASSES = ['car', 'motorcycle'] as const satisfies readonly VehicleClass[]
 
 export const VEHICLE_CLASS_LABELS: Record<VehicleClass, string> = {

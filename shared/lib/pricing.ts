@@ -23,12 +23,51 @@ export interface PricedService {
 }
 
 export interface CartLine {
+  /**
+   * The catalogue service's id, or a synthetic `custom:` key for a one-off
+   * line the cashier typed at the counter. Both clients key the cart by this,
+   * so it has to be unique per line rather than merely per service.
+   */
   serviceId: string
   serviceName: string
   category: ServiceCategory
   quantity: number
   unitPriceCentavos: number
   commissionRateBp: number
+  /**
+   * Free text the cashier typed for a custom line — what the job actually was.
+   * Catalogue lines leave it undefined. `sale_items` has no description
+   * column, so this is folded into the stored service name by
+   * `customServiceName()` at sale time; it is kept apart here only so the cart
+   * can show the name and the note on separate rows.
+   */
+  description?: string
+}
+
+/**
+ * Synthetic ids for lines that are not in the catalogue. `create_sale` writes
+ * `nullif(service_id, '')::uuid`, so a custom line posts a null service_id and
+ * carries its own name, price, and rate — exactly what an open-price line
+ * already does, minus the service row behind it.
+ */
+export const CUSTOM_LINE_PREFIX = 'custom:'
+
+export function isCustomLine(line: CartLine): boolean {
+  return line.serviceId.startsWith(CUSTOM_LINE_PREFIX)
+}
+
+/**
+ * A fresh key for a custom line. Two "Buffing" lines on one ticket are two
+ * different jobs at possibly different prices, so they must not collapse into
+ * one another the way a repeated catalogue tile does.
+ */
+export function newCustomLineId(): string {
+  return `${CUSTOM_LINE_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** What the RPC is sent as `service_id`: null for anything not in the catalogue. */
+export function serviceIdForSale(line: CartLine): string | null {
+  return isCustomLine(line) ? null : line.serviceId
 }
 
 /**

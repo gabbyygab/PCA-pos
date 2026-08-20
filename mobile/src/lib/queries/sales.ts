@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
-import type { CartLine } from '@shared/lib/pricing'
+import { serviceIdForSale, type CartLine } from '@shared/lib/pricing'
+import { customServiceName } from '@shared/lib/domain'
 import type { PaymentMethod, SizeLabel, VehicleClass } from '@shared/lib/domain'
 
 export const salesKey = ['sales'] as const
@@ -75,8 +76,10 @@ export function useCreateSale() {
         p_payment_method: input.paymentMethod,
         p_plate_number: input.plateNumber || undefined,
         p_items: input.lines.map((line) => ({
-          service_id: line.serviceId,
-          service_name: line.serviceName,
+          // A custom line has no catalogue row behind it, so it posts a null
+          // service_id and its typed note folded into the stored name.
+          service_id: serviceIdForSale(line),
+          service_name: customServiceName(line.serviceName, line.description),
           category: line.category,
           quantity: line.quantity,
           unit_price_centavos: line.unitPriceCentavos,
