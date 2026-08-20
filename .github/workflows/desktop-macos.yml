@@ -52,6 +52,22 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: npm run build
 
+      # The bundle came out carrying only icon.icns, which means Tauri found no
+      # frontend to copy. Print what the export actually produced, and where, so
+      # the next failure names its own cause instead of being guessed at.
+      - name: Show what the export produced
+        working-directory: web
+        run: |
+          echo "--- cwd:"; pwd
+          echo "--- web/out exists?"
+          ls -la out 2>&1 | head -30 || echo "NO out/ DIRECTORY"
+          echo "--- index.html present?"
+          test -f out/index.html && echo "yes" || echo "NO index.html"
+          echo "--- file count under out/:"
+          find out -type f 2>/dev/null | wc -l || echo 0
+          echo "--- frontendDist as tauri sees it (src-tauri/../out):"
+          ls -la src-tauri/../out 2>&1 | head -5 || echo "does not resolve"
+
       - name: Build macOS bundle
         working-directory: web
         env:
@@ -62,7 +78,9 @@ jobs:
         # content. Let tauri.conf.json drive the build, exactly as the working
         # Windows builds do. beforeBuildCommand re-runs the export, which is
         # redundant with the step above but harmless.
-        run: npx tauri build --target universal-apple-darwin --bundles app dmg
+        # --verbose so the log names the directory Tauri resolved frontendDist
+        # to, and whether it copied anything out of it.
+        run: npx tauri build --target universal-apple-darwin --bundles app dmg --verbose
 
       # The failure this guards against is silent: Tauri happily bundles an
       # empty out/ into a valid .app, and the break only shows up as a blank
