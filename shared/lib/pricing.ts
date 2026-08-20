@@ -6,7 +6,7 @@
  * math and rounds once per line, never unrounded float multiplication.
  */
 
-import type { ServiceCategory, VehicleSize } from './domain'
+import type { ServiceCategory } from './domain'
 
 export interface PricedService {
   id: string
@@ -14,8 +14,12 @@ export interface PricedService {
   category: ServiceCategory
   commission_rate_bp: number
   is_open_price: boolean
-  /** size -> price in centavos. A missing size is not offered. */
-  prices: Partial<Record<VehicleSize, number>>
+  /**
+   * vehicle_sizes.id -> price in centavos. Keyed by the size row's id rather
+   * than its label, so renaming a size in Settings keeps its prices attached.
+   * A missing size is not offered.
+   */
+  prices: Record<string, number | undefined>
 }
 
 export interface CartLine {
@@ -33,14 +37,14 @@ export interface CartLine {
  */
 export function resolvePrice(
   service: PricedService,
-  size: VehicleSize
+  sizeId: string
 ): number | null {
   if (service.is_open_price) return null
-  return service.prices[size] ?? null
+  return service.prices[sizeId] ?? null
 }
 
-export function isAvailableAtSize(service: PricedService, size: VehicleSize): boolean {
-  return service.is_open_price || service.prices[size] !== undefined
+export function isAvailableAtSize(service: PricedService, sizeId: string): boolean {
+  return service.is_open_price || service.prices[sizeId] !== undefined
 }
 
 export function lineTotal(line: CartLine): number {

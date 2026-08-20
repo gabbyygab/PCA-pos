@@ -1,0 +1,70 @@
+# Builds the macOS desktop app.
+#
+# This cannot run on the Windows dev machine: Tauri links against Apple's own
+# frameworks (WebKit, AppKit), which ship only inside Xcode, and the .dmg is
+# assembled by `hdiutil` — an Apple-only tool. A macOS runner is the whole point
+# of this file.
+#
+# Built as `universal-apple-darwin`: one binary carrying both the Apple silicon
+# and Intel slices, so a single .dmg runs natively on any Mac the shop owns and
+# nobody has to know which chip is inside.
+name: Desktop (macOS)
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # A universal binary is two real compilations, so both targets must be
+      # installed even though only one `tauri build` runs.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: web/src-tauri -> target
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      # `tauri build` runs this itself via beforeBuildCommand; running it as its
+      # own step surfaces a TypeScript failure plainly instead of buried in Rust
+      # output.
+      - name: Build web bundle
+        working-directory: web
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: npm run build
+
+      - name: Build macOS bundle
+        working-directory: web
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: npx tauri build --target universal-apple-darwin --bundles app dmg
+
+      # Unsigned, so macOS quarantines it on download — see the testing guide in
+      # CLAUDE.md for the one-line fix the tester runs.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pca-pos-macos-universal
+          if-no-files-found: error
+          path: |
+            web/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            web/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app

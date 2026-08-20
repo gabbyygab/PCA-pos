@@ -1,0 +1,8 @@
+# Build artifacts — installers and APKs are large binaries, not source.
+builds/
+
+# Android signing secrets. The release keystore and its passwords sign every
+# APK the cashiers install; losing or leaking it means no signed upgrade path.
+*.keystore
+*.jks
+keystore.properties

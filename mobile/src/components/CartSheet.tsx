@@ -1,0 +1,320 @@
+import { useRef } from 'react'
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native'
+import { Button } from '@/components/Button'
+import { Sheet } from '@/components/Sheet'
+import { formatPeso } from '@shared/lib/currency'
+import {
+  cartCommissionPaid,
+  cartShare,
+  cartTotal,
+  lineTotal,
+  type CartLine,
+} from '@shared/lib/pricing'
+import { PAYMENT_LABELS, type PaymentMethod } from '@shared/lib/domain'
+import { colors, boardHead, boardLabel, radius, TAP } from '@/theme'
+
+const PAYMENTS: PaymentMethod[] = ['cash', 'gcash', 'card', 'bank_transfer']
+
+interface CartSheetProps {
+  visible: boolean
+  lines: CartLine[]
+  sizeLabel: string | null
+  crewNames: string[]
+  crewSize: number
+  payment: PaymentMethod
+  plate: string
+  saving: boolean
+  onClose: () => void
+  onPaymentChange: (p: PaymentMethod) => void
+  onPlateChange: (v: string) => void
+  onQuantityChange: (serviceId: string, quantity: number) => void
+  onRemove: (serviceId: string) => void
+  onPickCrew: () => void
+  onSubmit: () => void
+}
+
+/**
+ * The receipt before it is a receipt.
+ *
+ * Commission is shown with the same functions the dashboard and Postgres use
+ * (`cartCommissionPaid` / `cartShare`), so the number the cashier reads out to
+ * the crew is the number payroll will pay — including the deliberate round-up
+ * overage on an uneven split.
+ *
+ * The plate field is the last thing in the scroller, which is exactly where a
+ * keyboard lands. `Sheet` lifts the whole sheet by the measured keyboard
+ * height; this component's own job is to scroll that field into view once the
+ * lift has happened, so the cashier can see what they are typing.
+ */
+export function CartSheet({
+  visible,
+  lines,
+  sizeLabel,
+  crewNames,
+  crewSize,
+  payment,
+  plate,
+  saving,
+  onClose,
+  onPaymentChange,
+  onPlateChange,
+  onQuantityChange,
+  onRemove,
+  onPickCrew,
+  onSubmit,
+}: CartSheetProps) {
+  const scrollRef = useRef<ScrollView>(null)
+
+  const total = cartTotal(lines)
+  const paid = crewSize > 0 ? cartCommissionPaid(lines, crewSize) : 0
+  const each = crewSize > 0 ? cartShare(lines, crewSize) : 0
+
+  const ready = lines.length > 0 && crewSize > 0 && Boolean(sizeLabel)
+
+  return (
+    <Sheet visible={visible} onClose={onClose}>
+      <View style={styles.head}>
+        <Text style={[boardHead, styles.title]}>Cart</Text>
+        <Text style={styles.sizeTag}>{sizeLabel ?? '—'}</Text>
+      </View>
+
+      <ScrollView
+        ref={scrollRef}
+        style={styles.body}
+        // Without this the first tap on a chip or Remove while the keyboard is
+        // up is swallowed by the dismiss.
+        keyboardShouldPersistTaps="handled"
+        // Dragging the list is how a thumb naturally puts the keyboard away.
+        keyboardDismissMode="on-drag"
+      >
+        {lines.length === 0 ? (
+          <Text style={styles.empty}>Nothing added yet.</Text>
+        ) : (
+          lines.map((line) => (
+            <View key={line.serviceId} style={styles.line}>
+              <View style={styles.lineTop}>
+                <Text style={styles.lineName} numberOfLines={2}>
+                  {line.serviceName}
+                </Text>
+                <Text style={styles.lineTotal}>{formatPeso(lineTotal(line))}</Text>
+              </View>
+
+              <View style={styles.lineBottom}>
+                <View style={styles.stepper}>
+                  <Pressable
+                    onPress={() => onQuantityChange(line.serviceId, line.quantity - 1)}
+                    style={styles.step}
+                    accessibilityLabel={`Decrease ${line.serviceName}`}
+                  >
+                    <Text style={styles.stepText}>{'−'}</Text>
+                  </Pressable>
+                  <Text style={styles.qty}>{line.quantity}</Text>
+                  <Pressable
+                    onPress={() => onQuantityChange(line.serviceId, line.quantity + 1)}
+                    style={styles.step}
+                    accessibilityLabel={`Increase ${line.serviceName}`}
+                  >
+                    <Text style={styles.stepText}>+</Text>
+                  </Pressable>
+                </View>
+
+                <Pressable onPress={() => onRemove(line.serviceId)} hitSlop={8}>
+                  <Text style={styles.remove}>Remove</Text>
+                </Pressable>
+              </View>
+            </View>
+          ))
+        )}
+
+        <Text style={[boardLabel, styles.section]}>Crew</Text>
+        <Pressable onPress={onPickCrew} style={styles.crewBtn}>
+          <Text
+            style={[styles.crewText, crewNames.length === 0 && styles.crewEmpty]}
+            numberOfLines={2}
+          >
+            {crewNames.length
+              ? crewNames.join(', ')
+              : 'Tap to pick who washed this car'}
+          </Text>
+        </Pressable>
+
+        <Text style={[boardLabel, styles.section]}>Payment</Text>
+        <View style={styles.chips}>
+          {PAYMENTS.map((p) => (
+            <Pressable
+              key={p}
+              onPress={() => onPaymentChange(p)}
+              style={[styles.chip, payment === p && styles.chipOn]}
+            >
+              <Text style={[styles.chipText, payment === p && styles.chipTextOn]}>
+                {PAYMENT_LABELS[p]}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        <Text style={[boardLabel, styles.section]}>Plate (optional)</Text>
+        <TextInput
+          value={plate}
+          onChangeText={onPlateChange}
+          placeholder="ABC 1234"
+          placeholderTextColor={colors.faint}
+          autoCapitalize="characters"
+          autoCorrect={false}
+          style={styles.input}
+          returnKeyType="done"
+          // The sheet has already lifted by the time focus settles; scrolling
+          // to the end then puts the field above the keyboard instead of
+          // behind the totals bar.
+          onFocus={() =>
+            setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 180)
+          }
+        />
+      </ScrollView>
+
+      <View style={styles.totals}>
+        <View style={styles.totalRow}>
+          <Text style={styles.totalLabel}>Total</Text>
+          <Text style={styles.totalValue}>{formatPeso(total)}</Text>
+        </View>
+        <View style={styles.totalRow}>
+          <Text style={styles.subLabel}>
+            Commission{crewSize > 1 ? ` · ${crewSize} split` : ''}
+          </Text>
+          <Text style={styles.subValue}>
+            {formatPeso(paid)}
+            {crewSize > 1 ? `  (${formatPeso(each)} each)` : ''}
+          </Text>
+        </View>
+      </View>
+
+      <Button
+        label={saving ? 'Saving…' : 'Save sale'}
+        onPress={onSubmit}
+        disabled={!ready}
+        loading={saving}
+      />
+    </Sheet>
+  )
+}
+
+const styles = StyleSheet.create({
+  head: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  title: { fontSize: 20 },
+  sizeTag: {
+    color: colors.chalk,
+    fontSize: 12,
+    fontWeight: '800',
+    borderWidth: 1,
+    borderColor: colors.lineStrong,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    overflow: 'hidden',
+  },
+  // `minHeight: 0` is what actually lets this shrink: a scroll container's flex
+  // basis is its content, and Yoga will not go below that basis without it, so
+  // `flexShrink` alone left the totals and Save button off the squeezed sheet.
+  body: { flexShrink: 1, minHeight: 0, marginTop: 12 },
+  empty: { color: colors.faint, fontSize: 13, paddingVertical: 16 },
+  line: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radius.md,
+    backgroundColor: colors.ink,
+    padding: 12,
+    marginBottom: 8,
+  },
+  lineTop: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
+  lineName: { color: colors.chalk, fontSize: 14, fontWeight: '700', flex: 1 },
+  lineTotal: { color: colors.chalk, fontSize: 15, fontWeight: '800' },
+  lineBottom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  stepper: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  step: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.lineStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepText: { color: colors.chalk, fontSize: 19, fontWeight: '800' },
+  qty: {
+    color: colors.chalk,
+    fontSize: 15,
+    fontWeight: '800',
+    minWidth: 34,
+    textAlign: 'center',
+  },
+  remove: { color: colors.faint, fontSize: 13, fontWeight: '600' },
+  section: { color: colors.faint, fontSize: 10, marginTop: 16, marginBottom: 8 },
+  crewBtn: {
+    minHeight: TAP,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radius.md,
+    backgroundColor: colors.ink,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  crewText: { color: colors.chalk, fontSize: 14, fontWeight: '600' },
+  crewEmpty: { color: colors.faint, fontWeight: '400' },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    minHeight: 42,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.ink,
+  },
+  chipOn: { borderColor: colors.red, backgroundColor: 'rgba(225,20,20,0.12)' },
+  chipText: { color: colors.muted, fontSize: 13, fontWeight: '700' },
+  chipTextOn: { color: colors.chalk },
+  input: {
+    minHeight: TAP,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.ink,
+    color: colors.chalk,
+    paddingHorizontal: 14,
+    fontSize: 15,
+  },
+  totals: {
+    borderTopWidth: 1,
+    borderColor: colors.line,
+    paddingTop: 12,
+    marginTop: 12,
+    marginBottom: 12,
+    gap: 4,
+  },
+  totalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  totalLabel: { color: colors.muted, fontSize: 13, fontWeight: '700' },
+  totalValue: { color: colors.chalk, fontSize: 24, fontWeight: '800' },
+  subLabel: { color: colors.faint, fontSize: 12 },
+  subValue: { color: colors.muted, fontSize: 12, fontWeight: '600' },
+})

@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "PCA Cashier",
+    "slug": "pca-cashier",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "pcacashier",
+    "backgroundColor": "#0A0A0A",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0A0A0A",
+      "image": "./assets/splash-icon.png"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ph.pca.cashier"
+    },
+    "android": {
+      "package": "ph.pca.cashier",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0A0A0A"
+      },
+      "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
+      "icon": "./assets/icon.png"
+    },
+    "extra": {
+      "supabaseUrl": "https://uxdomhpxhcvaqqpryloq.supabase.co",
+      "supabaseAnonKey": "sb_publishable_SIGWXJV3Wczpe5esb6c-vg_F2AcTtO1"
+    },
+    "plugins": [
+      "./plugins/withReleaseSigning"
+    ],
+    "icon": "./assets/icon.png",
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

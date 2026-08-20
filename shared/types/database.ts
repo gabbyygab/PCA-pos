@@ -39,6 +39,42 @@ export type Database = {
         }
         Relationships: []
       }
+      expenses: {
+        Row: {
+          amount_centavos: number
+          created_at: string
+          created_by: string | null
+          created_by_email: string | null
+          description: string | null
+          id: string
+          name: string
+          spent_on: string
+          updated_at: string
+        }
+        Insert: {
+          amount_centavos: number
+          created_at?: string
+          created_by?: string | null
+          created_by_email?: string | null
+          description?: string | null
+          id?: string
+          name: string
+          spent_on?: string
+          updated_at?: string
+        }
+        Update: {
+          amount_centavos?: number
+          created_at?: string
+          created_by?: string | null
+          created_by_email?: string | null
+          description?: string | null
+          id?: string
+          name?: string
+          spent_on?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       inclusion_options: {
         Row: {
           created_at: string
@@ -279,7 +315,12 @@ export type Database = {
           sale_id: string
           service_id: string | null
           service_name: string
-          size: Database['public']['Enums']['vehicle_size']
+          size: string
+          status: Database['public']['Enums']['service_status']
+          status_changed_at: string | null
+          status_changed_by: string | null
+          effective_total_centavos: number
+          effective_commission_centavos: number
           unit_price_centavos: number
         }
         Insert: {
@@ -294,7 +335,10 @@ export type Database = {
           sale_id: string
           service_id?: string | null
           service_name: string
-          size: Database['public']['Enums']['vehicle_size']
+          size: string
+          status?: Database['public']['Enums']['service_status']
+          status_changed_at?: string | null
+          status_changed_by?: string | null
           unit_price_centavos: number
         }
         Update: {
@@ -309,7 +353,10 @@ export type Database = {
           sale_id?: string
           service_id?: string | null
           service_name?: string
-          size?: Database['public']['Enums']['vehicle_size']
+          size?: string
+          status?: Database['public']['Enums']['service_status']
+          status_changed_at?: string | null
+          status_changed_by?: string | null
           unit_price_centavos?: number
         }
         Relationships: [
@@ -345,7 +392,7 @@ export type Database = {
           payment_method: Database['public']['Enums']['payment_method']
           plate_number: string | null
           receipt_no: number
-          size: Database['public']['Enums']['vehicle_size']
+          size: string
           sold_at: string
           total_centavos: number
           vehicle_class: Database['public']['Enums']['vehicle_class']
@@ -360,7 +407,7 @@ export type Database = {
           payment_method?: Database['public']['Enums']['payment_method']
           plate_number?: string | null
           receipt_no?: never
-          size: Database['public']['Enums']['vehicle_size']
+          size: string
           sold_at?: string
           total_centavos?: number
           vehicle_class: Database['public']['Enums']['vehicle_class']
@@ -375,7 +422,7 @@ export type Database = {
           payment_method?: Database['public']['Enums']['payment_method']
           plate_number?: string | null
           receipt_no?: never
-          size?: Database['public']['Enums']['vehicle_size']
+          size?: string
           sold_at?: string
           total_centavos?: number
           vehicle_class?: Database['public']['Enums']['vehicle_class']
@@ -398,7 +445,7 @@ export type Database = {
           id: string
           price_centavos: number
           service_id: string
-          size: Database['public']['Enums']['vehicle_size']
+          size_id: string
           updated_at: string
         }
         Insert: {
@@ -406,7 +453,7 @@ export type Database = {
           id?: string
           price_centavos: number
           service_id: string
-          size: Database['public']['Enums']['vehicle_size']
+          size_id: string
           updated_at?: string
         }
         Update: {
@@ -414,7 +461,7 @@ export type Database = {
           id?: string
           price_centavos?: number
           service_id?: string
-          size?: Database['public']['Enums']['vehicle_size']
+          size_id?: string
           updated_at?: string
         }
         Relationships: [
@@ -423,6 +470,13 @@ export type Database = {
             columns: ['service_id']
             isOneToOne: false
             referencedRelation: 'services'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'service_prices_size_id_fkey'
+            columns: ['size_id']
+            isOneToOne: false
+            referencedRelation: 'vehicle_sizes'
             referencedColumns: ['id']
           },
         ]
@@ -466,6 +520,39 @@ export type Database = {
         }
         Relationships: []
       }
+      vehicle_sizes: {
+        Row: {
+          created_at: string
+          description: string | null
+          id: string
+          is_active: boolean
+          label: string
+          sort_order: number
+          updated_at: string
+          vehicle_class: Database['public']['Enums']['vehicle_class']
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          label: string
+          sort_order?: number
+          updated_at?: string
+          vehicle_class: Database['public']['Enums']['vehicle_class']
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          label?: string
+          sort_order?: number
+          updated_at?: string
+          vehicle_class?: Database['public']['Enums']['vehicle_class']
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -478,7 +565,7 @@ export type Database = {
           p_items: Json
           p_payment_method?: Database['public']['Enums']['payment_method']
           p_plate_number?: string
-          p_size: Database['public']['Enums']['vehicle_size']
+          p_size: string
           p_vehicle_class: Database['public']['Enums']['vehicle_class']
           p_vehicle_note?: string
         }
@@ -489,6 +576,14 @@ export type Database = {
         Returns: string
       }
       is_owner: { Args: never; Returns: boolean }
+      recalc_sale_totals: { Args: { p_sale_id: string }; Returns: undefined }
+      set_service_status: {
+        Args: {
+          p_sale_item_id: string
+          p_status: Database['public']['Enums']['service_status']
+        }
+        Returns: undefined
+      }
       reopen_payroll_period: {
         Args: { p_period_id: string }
         Returns: undefined
@@ -505,8 +600,8 @@ export type Database = {
       payment_method: 'cash' | 'gcash' | 'card' | 'bank_transfer'
       payroll_status: 'open' | 'finalized'
       service_category: 'basic' | 'package' | 'addon'
+      service_status: 'pending' | 'done' | 'refunded'
       vehicle_class: 'car' | 'motorcycle'
-      vehicle_size: 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'small' | 'medium' | 'big'
     }
     CompositeTypes: {
       [_ in never]: never
@@ -621,7 +716,6 @@ export const Constants = {
       payroll_status: ['open', 'finalized'],
       service_category: ['basic', 'package', 'addon'],
       vehicle_class: ['car', 'motorcycle'],
-      vehicle_size: ['S', 'M', 'L', 'XL', 'XXL', 'small', 'medium', 'big'],
     },
   },
 } as const
