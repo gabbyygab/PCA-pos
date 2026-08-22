@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { weekStart } from '@shared/lib/payroll'
-import type { SizeLabel, VehicleClass } from '@shared/lib/domain'
+import type { ServiceStatus, SizeLabel, VehicleClass } from '@shared/lib/domain'
 import type { Tables } from '@shared/types/database'
 
 export type Employee = Tables<'employees'>
@@ -205,7 +205,7 @@ export function useEmployeeStats(employeeId: string | null) {
       const { data, error } = await supabase
         .from('sale_item_commissions')
         .select(
-          'sale_id, commission_centavos, sale_items!inner (service_name, size, line_total_centavos), sales!inner (receipt_no, sold_at, plate_number, vehicle_class, voided_at)'
+          'sale_id, commission_centavos, sale_items!inner (service_name, size, line_total_centavos, effective_total_centavos, status), sales!inner (receipt_no, sold_at, plate_number, vehicle_class, voided_at)'
         )
         .eq('employee_id', employeeId!)
         .gte('sales.sold_at', since.toISOString())
@@ -219,6 +219,8 @@ export function useEmployeeStats(employeeId: string | null) {
           service_name: string
           size: SizeLabel
           line_total_centavos: number
+          effective_total_centavos: number
+          status: ServiceStatus
         } | null
         sales: {
           receipt_no: number
@@ -250,15 +252,20 @@ export function useEmployeeStats(employeeId: string | null) {
           commissionCentavos: 0,
         }
         sale.services.push(line.service_name)
-        // Gross credits the full line: it measures the work done on the car,
-        // while only the commission is split across the crew.
-        sale.grossCentavos += line.line_total_centavos
-        sale.commissionCentavos += row.commission_centavos
+        // Only finished work counts, for gross and for the cut alike. A
+        // generated column cannot reach across to the line's status, so the
+        // reversal the `effective_` columns apply to sale_items is applied to
+        // the crew share here -- the same rule the Payroll tab and
+        // `finalize_payroll_period` apply. Without it this panel credits an
+        // employee for a refunded car and for a wax nobody has started.
+        const earned = line.status === 'done' ? row.commission_centavos : 0
+        sale.grossCentavos += line.effective_total_centavos
+        sale.commissionCentavos += earned
         sales.set(row.sale_id, sale)
 
         const service = services.get(line.service_name) ?? { count: 0, commissionCentavos: 0 }
         service.count += 1
-        service.commissionCentavos += row.commission_centavos
+        service.commissionCentavos += earned
         services.set(line.service_name, service)
       }
 

@@ -158,3 +158,24 @@ export function sortSizeLabels(
   }
   return [...labels].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
 }
+
+/**
+ * How a car is described on a ticket, from the two free-text fields a sale
+ * carries: `vehicle_note` (what the vehicle is — "Toyota Vios") and
+ * `plate_number`.
+ *
+ * Both are optional, so this exists to keep the four combinations from being
+ * re-derived — differently — in the service record, the POS feed, and the PDF.
+ * The name leads because that is what someone standing at the bay is looking
+ * at; the plate follows in the same string because it is the identifier when
+ * two silver Vios are on the lot at once.
+ */
+export function vehicleLabel(
+  vehicleNote?: string | null,
+  plateNumber?: string | null
+): string | null {
+  const name = (vehicleNote ?? '').trim()
+  const plate = (plateNumber ?? '').trim()
+  if (name && plate) return `${name} · ${plate}`
+  return name || plate || null
+}
