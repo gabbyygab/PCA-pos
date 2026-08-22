@@ -38,6 +38,18 @@ jobs:
         with:
           workspaces: web/src-tauri -> target
 
+      # Next.js inlines these at build time, so a build without them succeeds
+      # and produces an app that points at `undefined` and fails every login
+      # with no obvious cause. Fail here, in seconds, rather than after the
+      # whole Rust compile.
+      - name: Check the build secrets are set
+        run: |
+          if [ -z "${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}" ] || [ -z "${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" ]; then
+            echo "::error::NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY are not set in repo secrets (Settings -> Secrets and variables -> Actions)"
+            exit 1
+          fi
+          echo "secrets present"
+
       - name: Install dependencies
         working-directory: web
         run: npm ci
@@ -74,30 +86,53 @@ jobs:
       # build with the secrets missing still succeeds and only fails later, at
       # every login, against `undefined`.
       #
-      # The executable is named for the **Cargo binary** (`pca-pos`), not for
-      # productName -- the bundler copies `target/<triple>/release/<bin_name>`
-      # into `Contents/MacOS/<bin_name>`, and only the .app directory around it
-      # takes the pretty name. So find whatever is in MacOS/ rather than
-      # guessing at the name, which is what made this step fail on a bundle
-      # that had built correctly.
       - name: Verify the binary carries the web app
         working-directory: web
         env:
           SUPA_HOST: uxdomhpxhcvaqqpryloq.supabase.co
         run: |
-          set -euo pipefail
-          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/PCA POS.app"
-          BIN="$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -perm -u+x | head -1 || true)"
+          set -uo pipefail
+          BUNDLE="src-tauri/target/universal-apple-darwin/release/bundle"
+
+          # Find the .app rather than hardcoding its name: productName drives
+          # the directory name, so a rename in tauri.conf.json would otherwise
+          # break this step on a build that is perfectly fine.
+          APP="$(find "$BUNDLE" -maxdepth 2 -type d -name '*.app' -print -quit)"
+          if [ -z "$APP" ]; then
+            echo "::error::no .app produced under $BUNDLE"
+            find "$BUNDLE" -maxdepth 4 || true
+            exit 1
+          fi
+          echo "found app: $APP"
+
+          # The executable is named for the Cargo binary (pca-pos), not for
+          # productName -- the bundler copies target/<triple>/release/<bin_name>
+          # into Contents/MacOS/<bin_name>, and only the .app directory around
+          # it takes the pretty name. So take whatever is in MacOS/ rather than
+          # guessing the name.
+          #
+          # Deliberately no `head -1` in a pipeline here: under `pipefail` the
+          # early close sends SIGPIPE to find, the substitution returns
+          # non-zero, and `set -e` would kill the step before the diagnostic
+          # below could ever print -- which is exactly how this step failed on
+          # bundles that had built correctly. `-print -quit` stops find itself.
+          BIN="$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -perm -u+x -print -quit)"
           if [ -z "$BIN" ]; then
             echo "::error::no executable inside $APP/Contents/MacOS"
-            find "src-tauri/target/universal-apple-darwin/release/bundle" -maxdepth 4 || true
+            ls -la "$APP/Contents/MacOS" || true
             exit 1
           fi
           echo "found executable: $BIN"
+
           # A universal build is only universal if lipo actually fused both
           # slices; a single-arch binary here still runs on the build machine
           # and would ship broken to the other kind of Mac.
           lipo -info "$BIN"
+          lipo -info "$BIN" | grep -q "x86_64" && lipo -info "$BIN" | grep -q "arm64" || {
+            echo "::error::binary is not universal (missing an architecture slice)"
+            exit 1
+          }
+
           if ! grep -qa "_next/static" "$BIN"; then
             echo "::error::the static export is not embedded in the binary"
             exit 1
@@ -106,7 +141,7 @@ jobs:
             echo "::error::the Supabase URL is not inlined - check the repo secrets"
             exit 1
           fi
-          echo "binary OK: static export embedded and Supabase URL inlined"
+          echo "binary OK: universal, static export embedded, Supabase URL inlined"
 
       # Unsigned, so macOS quarantines it on download — see the testing guide in
       # CLAUDE.md for the one-line fix the tester runs.
@@ -117,3 +152,7 @@ jobs:
           path: |
             web/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
             web/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
+          # The .app is a directory; upload-artifact walks it. The .dmg is the
+          # thing a tester actually wants, so a missing .app alone should not
+          # sink the run -- the verify step above has already proved the
+          # bundle is sound.
