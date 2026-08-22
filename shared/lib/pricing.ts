@@ -141,3 +141,68 @@ export function cartCommissionPaid(lines: readonly CartLine[], crewSize: number)
 export function cartShare(lines: readonly CartLine[], crewSize: number): number {
   return lines.reduce((sum, line) => sum + shareOfCommission(line, crewSize), 0)
 }
+
+/**
+ * A promo takes a percentage off what the customer pays and nothing off what
+ * the crew earns.
+ *
+ * That asymmetry is the point, and it is why the discount is never folded into
+ * `unitPriceCentavos`: every commission function above reads the line total, so
+ * discounting the price in place would quietly cut the crew's pay too. The
+ * customer's concession is the shop's to give, not theirs.
+ *
+ * The rate is basis points, like `commissionRateBp` — 2000 is 20%.
+ */
+
+/** A promo of this many basis points is no promo at all. */
+export function hasPromo(discountRateBp: number): boolean {
+  return discountRateBp > 0
+}
+
+/**
+ * What comes off one line.
+ *
+ * Rounded DOWN, the mirror image of `shareOfCommission`'s round UP: a crew
+ * share rounds up so an uneven split never shorts the crew, and a discount
+ * rounds down so an uneven percentage never hands back more than the promo
+ * promised. Each rounds in the direction that protects whoever did not choose
+ * the arithmetic. Mirrors `create_sale` in Postgres exactly.
+ */
+export function lineDiscount(line: CartLine, discountRateBp: number): number {
+  if (discountRateBp <= 0) return 0
+  return Math.floor((lineTotal(line) * discountRateBp) / 10000)
+}
+
+/** What the customer owes for one line, after the promo. */
+export function lineNetTotal(line: CartLine, discountRateBp: number): number {
+  return lineTotal(line) - lineDiscount(line, discountRateBp)
+}
+
+/**
+ * The whole cart's discount, summed per line rather than taken off the cart
+ * total — the rounding has to happen where the stored amount does, or the
+ * preview disagrees with what Postgres writes by a centavo.
+ */
+export function cartDiscount(lines: readonly CartLine[], discountRateBp: number): number {
+  return lines.reduce((sum, line) => sum + lineDiscount(line, discountRateBp), 0)
+}
+
+/** What the customer actually pays for the cart. */
+export function cartNetTotal(lines: readonly CartLine[], discountRateBp: number): number {
+  return cartTotal(lines) - cartDiscount(lines, discountRateBp)
+}
+
+/** `20` (percent, as typed) -> `2000` (basis points, as stored). */
+export function percentToBp(percent: number): number {
+  return Math.round(percent * 100)
+}
+
+export function bpToPercent(bp: number): number {
+  return bp / 100
+}
+
+/** A promo percentage the UI will accept: 0–100, no fractional centavo games. */
+export function clampDiscountBp(bp: number): number {
+  if (!Number.isFinite(bp)) return 0
+  return Math.min(Math.max(Math.round(bp), 0), 10000)
+}

@@ -321,6 +321,9 @@ export type Database = {
           status_changed_by: string | null
           effective_total_centavos: number
           effective_commission_centavos: number
+          discount_centavos: number
+          discount_rate_bp: number
+          net_total_centavos: number
           unit_price_centavos: number
         }
         Insert: {
@@ -339,6 +342,8 @@ export type Database = {
           status?: Database['public']['Enums']['service_status']
           status_changed_at?: string | null
           status_changed_by?: string | null
+          discount_centavos?: number
+          discount_rate_bp?: number
           unit_price_centavos: number
         }
         Update: {
@@ -357,6 +362,8 @@ export type Database = {
           status?: Database['public']['Enums']['service_status']
           status_changed_at?: string | null
           status_changed_by?: string | null
+          discount_centavos?: number
+          discount_rate_bp?: number
           unit_price_centavos?: number
         }
         Relationships: [
@@ -561,6 +568,7 @@ export type Database = {
       auth_role: { Args: never; Returns: string }
       create_sale: {
         Args: {
+          p_discount_rate_bp?: number
           p_employee_ids: string[]
           p_items: Json
           p_payment_method?: Database['public']['Enums']['payment_method']
@@ -570,6 +578,31 @@ export type Database = {
           p_vehicle_note?: string
         }
         Returns: string
+      }
+      delete_sale_items: {
+        Args: { p_sale_item_ids: string[] }
+        Returns: number
+      }
+      edit_sale_item: {
+        Args: {
+          p_employee_ids?: string[]
+          p_quantity?: number
+          p_sale_item_id: string
+          p_service_name?: string
+          p_unit_price_centavos?: number
+        }
+        Returns: undefined
+      }
+      edit_sale_ticket: {
+        Args: {
+          p_clear_plate_number?: boolean
+          p_clear_vehicle_note?: boolean
+          p_payment_method?: Database['public']['Enums']['payment_method']
+          p_plate_number?: string
+          p_sale_id: string
+          p_vehicle_note?: string
+        }
+        Returns: undefined
       }
       finalize_payroll_period: {
         Args: { p_week_start: string }
@@ -588,6 +621,10 @@ export type Database = {
       recalc_sale_totals: { Args: { p_sale_id: string }; Returns: undefined }
       set_account_password: {
         Args: { p_new_password: string; p_user_id: string }
+        Returns: undefined
+      }
+      set_sale_discount: {
+        Args: { p_discount_rate_bp: number; p_sale_id: string }
         Returns: undefined
       }
       set_service_status: {

@@ -10,10 +10,16 @@ import { CrewPicker } from './CrewPicker'
 import { formatPeso } from '@shared/lib/currency'
 import { PAYMENT_LABELS, type PaymentMethod } from '@shared/lib/domain'
 import {
+  bpToPercent,
   cartCommissionPaid,
+  cartDiscount,
+  cartNetTotal,
   cartShare,
   cartTotal,
+  clampDiscountBp,
+  hasPromo,
   lineTotal,
+  percentToBp,
   type CartLine,
 } from '@shared/lib/pricing'
 import type { Employee } from '@/lib/queries/employees'
@@ -30,6 +36,12 @@ interface CartProps {
   onPaymentChange: (method: PaymentMethod) => void
   plate: string
   onPlateChange: (plate: string) => void
+  /** What the vehicle is — "Toyota Vios". Free text, optional. */
+  vehicleNote: string
+  onVehicleNoteChange: (note: string) => void
+  /** A promo off the whole ticket, in basis points (2000 = 20%). */
+  discountRateBp: number
+  onDiscountChange: (bp: number) => void
   onQuantityChange: (serviceId: string, quantity: number) => void
   onRemove: (serviceId: string) => void
   onClear: () => void
@@ -47,6 +59,10 @@ export function Cart({
   onPaymentChange,
   plate,
   onPlateChange,
+  vehicleNote,
+  onVehicleNoteChange,
+  discountRateBp,
+  onDiscountChange,
   onQuantityChange,
   onRemove,
   onClear,
@@ -55,8 +71,14 @@ export function Cart({
 }: CartProps) {
   const total = cartTotal(lines)
   const crewSize = employeeIds.length
+  // Deliberately computed off the undiscounted cart: the promo is the shop's
+  // concession to the customer, never the crew's. Postgres applies the same
+  // rule, so this preview matches what the sale will store.
   const commission = cartCommissionPaid(lines, crewSize)
   const perPerson = cartShare(lines, crewSize)
+  const discount = cartDiscount(lines, discountRateBp)
+  const netTotal = cartNetTotal(lines, discountRateBp)
+  const promoOn = hasPromo(discountRateBp)
   const canSubmit = lines.length > 0 && crewSize > 0 && !isSaving
 
   return (
@@ -155,6 +177,19 @@ export function Cart({
           />
         </Field>
 
+        {/* The vehicle gets the full width and sits first: it is the longest
+            of the three values and the one a name is actually read from. */}
+        <div className="mt-3">
+          <Field label="Vehicle" htmlFor="cart-vehicle">
+            <Input
+              id="cart-vehicle"
+              value={vehicleNote}
+              onChange={(e) => onVehicleNoteChange(e.target.value)}
+              placeholder="e.g. Toyota Vios"
+            />
+          </Field>
+        </div>
+
         <div className="mt-3 grid grid-cols-2 gap-2">
           <Field label="Plate" htmlFor="cart-plate">
             <Input
@@ -178,7 +213,59 @@ export function Cart({
           </Field>
         </div>
 
+        {/* The promo sits with the money, not with the vehicle fields: it
+            changes the total, and the cashier types it while reading the
+            total back to the customer. */}
+        <div className="mt-3">
+          <Field
+            label="Promo"
+            htmlFor="cart-promo"
+            hint={promoOn ? 'Off the customer’s total. The crew still earns the full rate.' : undefined}
+          >
+            <div className="relative">
+              <Input
+                id="cart-promo"
+                type="number"
+                inputMode="decimal"
+                min={0}
+                max={100}
+                step={1}
+                className="pr-7"
+                value={discountRateBp === 0 ? '' : String(bpToPercent(discountRateBp))}
+                onChange={(e) => {
+                  const raw = e.target.value.trim()
+                  if (raw === '') return onDiscountChange(0)
+                  const pct = Number(raw)
+                  if (!Number.isFinite(pct)) return
+                  // Clamped here as well as in Postgres so the preview can
+                  // never show a total the RPC would refuse to write.
+                  onDiscountChange(clampDiscountBp(percentToBp(Math.min(Math.max(pct, 0), 100))))
+                }}
+                placeholder="0"
+                aria-label="Promo discount percent"
+              />
+              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs font-semibold text-faint">
+                %
+              </span>
+            </div>
+          </Field>
+        </div>
+
         <dl className="mt-4 space-y-1.5">
+          {promoOn ? (
+            <>
+              <div className="flex items-baseline justify-between">
+                <dt className="text-xs text-faint">Subtotal</dt>
+                <dd className="tnum text-xs font-semibold text-muted line-through">
+                  {formatPeso(total)}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between">
+                <dt className="text-xs text-faint">Promo ({bpToPercent(discountRateBp)}%)</dt>
+                <dd className="tnum text-xs font-semibold text-red">−{formatPeso(discount)}</dd>
+              </div>
+            </>
+          ) : null}
           <div className="flex items-baseline justify-between">
             <dt className="text-xs text-faint">Employee cut</dt>
             <dd className="tnum text-xs font-semibold text-muted">{formatPeso(commission)}</dd>
@@ -193,7 +280,8 @@ export function Cart({
           ) : null}
           <div className="flex items-baseline justify-between border-t border-line pt-2">
             <dt className="board-label text-[11px] text-muted">Total</dt>
-            <dd className="tnum text-2xl font-extrabold text-red">{formatPeso(total)}</dd>
+            {/* What the customer owes — the promo already taken off. */}
+            <dd className="tnum text-2xl font-extrabold text-red">{formatPeso(netTotal)}</dd>
           </div>
         </dl>
 

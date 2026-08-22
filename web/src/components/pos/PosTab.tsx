@@ -41,6 +41,9 @@ export function PosTab() {
   const [employeeIds, setEmployeeIds] = useState<string[]>([])
   const [payment, setPayment] = useState<PaymentMethod>('cash')
   const [plate, setPlate] = useState('')
+  const [vehicleNote, setVehicleNote] = useState('')
+  /** A promo off the whole ticket, in basis points (2000 = 20%). */
+  const [discountRateBp, setDiscountRateBp] = useState(0)
   const [openPriceFor, setOpenPriceFor] = useState<CatalogService | null>(null)
   const [customOpen, setCustomOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -194,7 +197,12 @@ export function PosTab() {
   function reset() {
     setLines([])
     setPlate('')
+    setVehicleNote('')
     setPayment('cash')
+    // The promo clears with the ticket. Unlike the crew, it belongs to one
+    // customer, and carrying it onto the next car would discount a sale
+    // nobody asked to discount.
+    setDiscountRateBp(0)
     // The crew is deliberately kept: the same two or three people work several
     // cars in a row, so re-picking them after every sale would be busywork.
   }
@@ -210,6 +218,8 @@ export function PosTab() {
         lines,
         paymentMethod: payment,
         plateNumber: plate,
+        vehicleNote,
+        discountRateBp,
       })
       const names = employeeIds
         .map((id) => employees?.find((e) => e.id === id)?.name)
@@ -427,6 +437,10 @@ export function PosTab() {
         onPaymentChange={setPayment}
         plate={plate}
         onPlateChange={setPlate}
+        discountRateBp={discountRateBp}
+        onDiscountChange={setDiscountRateBp}
+        vehicleNote={vehicleNote}
+        onVehicleNoteChange={setVehicleNote}
         onQuantityChange={(serviceId, quantity) =>
           setLines((prev) =>
             quantity <= 0
