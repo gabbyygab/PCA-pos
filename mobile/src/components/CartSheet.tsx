@@ -11,10 +11,16 @@ import { Button } from '@/components/Button'
 import { Sheet } from '@/components/Sheet'
 import { formatPeso } from '@shared/lib/currency'
 import {
+  bpToPercent,
   cartCommissionPaid,
+  cartDiscount,
+  cartNetTotal,
   cartShare,
   cartTotal,
+  clampDiscountBp,
+  hasPromo,
   lineTotal,
+  percentToBp,
   type CartLine,
 } from '@shared/lib/pricing'
 import { PAYMENT_LABELS, type PaymentMethod } from '@shared/lib/domain'
@@ -30,10 +36,16 @@ interface CartSheetProps {
   crewSize: number
   payment: PaymentMethod
   plate: string
+  /** What the vehicle is — "Toyota Vios". Free text, optional. */
+  vehicleNote: string
+  /** A promo off the whole ticket, in basis points (2000 = 20%). */
+  discountRateBp: number
   saving: boolean
   onClose: () => void
   onPaymentChange: (p: PaymentMethod) => void
   onPlateChange: (v: string) => void
+  onVehicleNoteChange: (v: string) => void
+  onDiscountChange: (bp: number) => void
   onQuantityChange: (serviceId: string, quantity: number) => void
   onRemove: (serviceId: string) => void
   onPickCrew: () => void
@@ -61,10 +73,14 @@ export function CartSheet({
   crewSize,
   payment,
   plate,
+  vehicleNote,
+  discountRateBp,
   saving,
   onClose,
   onPaymentChange,
   onPlateChange,
+  onVehicleNoteChange,
+  onDiscountChange,
   onQuantityChange,
   onRemove,
   onPickCrew,
@@ -73,6 +89,12 @@ export function CartSheet({
   const scrollRef = useRef<ScrollView>(null)
 
   const total = cartTotal(lines)
+  // Off the UNDISCOUNTED cart, deliberately: the promo is the shop's
+  // concession to the customer, never the crew's. Postgres applies the same
+  // rule, so this preview matches what the sale stores.
+  const discount = cartDiscount(lines, discountRateBp)
+  const netTotal = cartNetTotal(lines, discountRateBp)
+  const promoOn = hasPromo(discountRateBp)
   const paid = crewSize > 0 ? cartCommissionPaid(lines, crewSize) : 0
   const each = crewSize > 0 ? cartShare(lines, crewSize) : 0
 
@@ -168,6 +190,26 @@ export function CartSheet({
           ))}
         </View>
 
+        {/* Vehicle before plate: it is what the cashier is looking at, and
+            `words` capitalisation suits a model name where the plate field's
+            `characters` does not. Both scroll themselves into view on focus —
+            `Sheet` lifts by the keyboard height, and this puts the focused
+            field above the keys rather than behind the totals bar. */}
+        <Text style={[boardLabel, styles.section]}>Vehicle (optional)</Text>
+        <TextInput
+          value={vehicleNote}
+          onChangeText={onVehicleNoteChange}
+          placeholder="e.g. Toyota Vios"
+          placeholderTextColor={colors.faint}
+          autoCapitalize="words"
+          autoCorrect={false}
+          style={styles.input}
+          returnKeyType="next"
+          onFocus={() =>
+            setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 180)
+          }
+        />
+
         <Text style={[boardLabel, styles.section]}>Plate (optional)</Text>
         <TextInput
           value={plate}
@@ -178,9 +220,30 @@ export function CartSheet({
           autoCorrect={false}
           style={styles.input}
           returnKeyType="done"
-          // The sheet has already lifted by the time focus settles; scrolling
-          // to the end then puts the field above the keyboard instead of
-          // behind the totals bar.
+          onFocus={() =>
+            setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 180)
+          }
+        />
+
+        {/* The promo is last because it is the least-used field and the one
+            typed while reading the total back to the customer. */}
+        <Text style={[boardLabel, styles.section]}>Promo % (optional)</Text>
+        <TextInput
+          value={discountRateBp === 0 ? '' : String(bpToPercent(discountRateBp))}
+          onChangeText={(raw) => {
+            const text = raw.trim()
+            if (text === '') return onDiscountChange(0)
+            const pct = Number(text)
+            if (!Number.isFinite(pct)) return
+            // Clamped here as well as in Postgres, so the sheet can never show
+            // a total the RPC would refuse to write.
+            onDiscountChange(clampDiscountBp(percentToBp(Math.min(Math.max(pct, 0), 100))))
+          }}
+          placeholder="0"
+          placeholderTextColor={colors.faint}
+          keyboardType="number-pad"
+          style={styles.input}
+          returnKeyType="done"
           onFocus={() =>
             setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 180)
           }
@@ -188,13 +251,27 @@ export function CartSheet({
       </ScrollView>
 
       <View style={styles.totals}>
+        {promoOn ? (
+          <>
+            <View style={styles.totalRow}>
+              <Text style={styles.subLabel}>Subtotal</Text>
+              <Text style={styles.struck}>{formatPeso(total)}</Text>
+            </View>
+            <View style={styles.totalRow}>
+              <Text style={styles.subLabel}>Promo ({bpToPercent(discountRateBp)}%)</Text>
+              <Text style={styles.promoValue}>-{formatPeso(discount)}</Text>
+            </View>
+          </>
+        ) : null}
         <View style={styles.totalRow}>
           <Text style={styles.totalLabel}>Total</Text>
-          <Text style={styles.totalValue}>{formatPeso(total)}</Text>
+          {/* What the customer owes, promo already taken off. */}
+          <Text style={styles.totalValue}>{formatPeso(netTotal)}</Text>
         </View>
         <View style={styles.totalRow}>
           <Text style={styles.subLabel}>
             Commission{crewSize > 1 ? ` · ${crewSize} split` : ''}
+            {promoOn ? ' · full price' : ''}
           </Text>
           <Text style={styles.subValue}>
             {formatPeso(paid)}
@@ -328,5 +405,12 @@ const styles = StyleSheet.create({
   totalLabel: { color: colors.muted, fontSize: 13, fontWeight: '700' },
   totalValue: { color: colors.chalk, fontSize: 24, fontWeight: '800' },
   subLabel: { color: colors.faint, fontSize: 12 },
+  struck: {
+    color: colors.faint,
+    fontSize: 12,
+    fontWeight: '600',
+    textDecorationLine: 'line-through',
+  },
+  promoValue: { color: colors.red, fontSize: 12, fontWeight: '700' },
   subValue: { color: colors.muted, fontSize: 12, fontWeight: '600' },
 })

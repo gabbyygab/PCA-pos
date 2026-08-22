@@ -65,6 +65,9 @@ export function PosScreen() {
   const [employeeIds, setEmployeeIds] = useState<string[]>([])
   const [payment, setPayment] = useState<PaymentMethod>('cash')
   const [plate, setPlate] = useState('')
+  const [vehicleNote, setVehicleNote] = useState('')
+  /** A promo off the whole ticket, in basis points (2000 = 20%). */
+  const [discountRateBp, setDiscountRateBp] = useState(0)
   const [openPriceFor, setOpenPriceFor] = useState<CatalogService | null>(null)
   const [customOpen, setCustomOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -249,7 +252,12 @@ export function PosScreen() {
   function reset() {
     setLines([])
     setPlate('')
+    setVehicleNote('')
     setPayment('cash')
+    // The promo clears with the ticket. Unlike the crew, it belongs to one
+    // customer, and carrying it onto the next car would discount a sale
+    // nobody asked to discount.
+    setDiscountRateBp(0)
     // The crew is deliberately kept: the same two or three people work several
     // cars in a row, so re-picking them after every sale would be busywork.
   }
@@ -265,6 +273,8 @@ export function PosScreen() {
         lines,
         paymentMethod: payment,
         plateNumber: plate,
+        vehicleNote,
+        discountRateBp,
       })
       setCartOpen(false)
       reset()
@@ -534,10 +544,14 @@ export function PosScreen() {
         crewSize={employeeIds.length}
         payment={payment}
         plate={plate}
+        vehicleNote={vehicleNote}
+        discountRateBp={discountRateBp}
         saving={createSale.isPending}
         onClose={() => setCartOpen(false)}
         onPaymentChange={setPayment}
         onPlateChange={setPlate}
+        onVehicleNoteChange={setVehicleNote}
+        onDiscountChange={setDiscountRateBp}
         onQuantityChange={(serviceId, quantity) =>
           setLines((prev) =>
             quantity <= 0

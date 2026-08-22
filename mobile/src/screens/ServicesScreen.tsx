@@ -11,9 +11,16 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ConfirmModal } from '@/components/ConfirmModal'
+import {
+  ServiceLineSheet,
+  type ServiceLineEdit,
+} from '@/components/ServiceLineSheet'
 import { useKeyboard } from '@/lib/keyboard/useKeyboard'
 import {
   serviceStatusErrorMessage,
+  useEditServiceLine,
+  useEditSaleTicket,
+  useSetSaleDiscount,
   useSetServiceStatus,
   useTodayServices,
   type ServiceLine,
@@ -24,6 +31,7 @@ import { formatPeso } from '@shared/lib/currency'
 import {
   SERVICE_STATUS_LABELS,
   VEHICLE_CLASS_LABELS,
+  vehicleLabel,
   type ServiceStatus,
 } from '@shared/lib/domain'
 
@@ -48,9 +56,15 @@ export function ServicesScreen() {
     null
   )
   const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState<{ line: ServiceLine; ticket: ServiceTicket } | null>(
+    null
+  )
 
   const { data, isLoading, isError, refetch, isRefetching } = useTodayServices()
   const setStatus = useSetServiceStatus()
+  const editLine = useEditServiceLine()
+  const editTicket = useEditSaleTicket()
+  const setDiscount = useSetSaleDiscount()
 
   const tickets = useMemo(() => {
     const needle = search.trim().toLowerCase()
@@ -64,6 +78,7 @@ export function ServicesScreen() {
         if (!needle) return true
         return (
           t.plate_number?.toLowerCase().includes(needle) ||
+          t.vehicle_note?.toLowerCase().includes(needle) ||
           String(t.receipt_no).includes(needle) ||
           t.employees?.name.toLowerCase().includes(needle) ||
           t.items.some((i) => i.service_name.toLowerCase().includes(needle))
@@ -89,6 +104,62 @@ export function ServicesScreen() {
       setError(serviceStatusErrorMessage(err))
     }
   }
+
+  async function saveEdit(edit: ServiceLineEdit) {
+    const target = editing
+    if (!target) return
+    setError(null)
+    try {
+      await editLine.mutateAsync({
+        saleItemId: target.line.id,
+        quantity: edit.quantity,
+        unitPriceCentavos: edit.unitPriceCentavos,
+        employeeIds: edit.employeeIds,
+      })
+      // Status moves through its own RPC, and only when it actually changed --
+      // `edit_sale_item` deliberately does not touch it.
+      if (edit.status !== target.line.status) {
+        await setStatus.mutateAsync({ saleItemId: target.line.id, status: edit.status })
+      }
+      // The header is a third RPC, and only when one of its fields actually
+      // moved: a line edit on an untouched ticket should not write `sales`.
+      // Empty is a real answer for the two optional text fields -- it clears
+      // them -- so it is compared against null, not skipped.
+      const nextNote = edit.vehicleNote === '' ? null : edit.vehicleNote
+      const nextPlate = edit.plateNumber === '' ? null : edit.plateNumber
+      if (
+        edit.paymentMethod !== target.ticket.payment_method ||
+        nextNote !== (target.ticket.vehicle_note ?? null) ||
+        nextPlate !== (target.ticket.plate_number ?? null)
+      ) {
+        await editTicket.mutateAsync({
+          saleId: target.ticket.id,
+          paymentMethod: edit.paymentMethod,
+          vehicleNote: nextNote,
+          plateNumber: nextPlate,
+        })
+      }
+      // The promo is a fourth RPC, for the same reason the header is a third:
+      // it writes every line on the ticket, and must not fire on a ticket
+      // whose promo nobody touched. `edit_sale_item` already re-applied this
+      // line's own discount at its stored rate.
+      if (edit.discountRateBp !== target.line.discount_rate_bp) {
+        await setDiscount.mutateAsync({
+          saleId: target.ticket.id,
+          discountRateBp: edit.discountRateBp,
+        })
+      }
+      setEditing(null)
+    } catch (err) {
+      setError(serviceStatusErrorMessage(err))
+    }
+  }
+
+  const busy =
+    setStatus.isPending ||
+    editLine.isPending ||
+    editTicket.isPending ||
+    setDiscount.isPending
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -196,26 +267,35 @@ export function ServicesScreen() {
             <TicketCard
               key={ticket.id}
               ticket={ticket}
-              busy={setStatus.isPending}
+              busy={busy}
               onSet={apply}
               onRefund={(line) => setRefunding({ line, ticket })}
+              onEdit={(line) => setEditing({ line, ticket })}
             />
           ))
         )}
       </ScrollView>
+
+      <ServiceLineSheet
+        line={editing?.line ?? null}
+        ticket={editing?.ticket ?? null}
+        busy={busy}
+        onClose={() => setEditing(null)}
+        onSave={saveEdit}
+      />
 
       <ConfirmModal
         visible={refunding !== null}
         title={refunding ? `Refund ${refunding.line.service_name}?` : ''}
         message={
           refunding
-            ? `${formatPeso(refunding.line.line_total_centavos)} comes off receipt #${
+            ? `${formatPeso(refunding.line.net_total_centavos)} comes off receipt #${
                 refunding.ticket.receipt_no
               } and off the crew's commission for it. The line stays on the ticket marked refunded.`
             : ''
         }
         confirmLabel="Refund"
-        busy={setStatus.isPending}
+        busy={busy}
         onConfirm={async () => {
           if (refunding) await apply(refunding.line, 'refunded')
           setRefunding(null)
@@ -231,11 +311,13 @@ function TicketCard({
   busy,
   onSet,
   onRefund,
+  onEdit,
 }: {
   ticket: ServiceTicket
   busy: boolean
   onSet: (line: ServiceLine, status: ServiceStatus) => void
   onRefund: (line: ServiceLine) => void
+  onEdit: (line: ServiceLine) => void
 }) {
   const voided = ticket.voided_at !== null
 
@@ -248,7 +330,10 @@ function TicketCard({
           </Text>
           <Text style={styles.cardSub}>
             {[
-              ticket.plate_number,
+              // The vehicle name leads: it is what someone at the bay is
+              // looking at, with the plate as the tie-breaker between two of
+              // the same car.
+              vehicleLabel(ticket.vehicle_note, ticket.plate_number),
               ticket.employees?.name,
               new Date(ticket.sold_at).toLocaleTimeString('en-PH', {
                 hour: 'numeric',
@@ -272,6 +357,7 @@ function TicketCard({
           disabled={busy || voided}
           onSet={(status) => onSet(line, status)}
           onRefund={() => onRefund(line)}
+          onEdit={() => onEdit(line)}
         />
       ))}
     </View>
@@ -283,11 +369,13 @@ function LineRow({
   disabled,
   onSet,
   onRefund,
+  onEdit,
 }: {
   line: ServiceLine
   disabled: boolean
   onSet: (status: ServiceStatus) => void
   onRefund: () => void
+  onEdit: () => void
 }) {
   const refunded = line.status === 'refunded'
   const tone =
@@ -296,18 +384,36 @@ function LineRow({
   return (
     <View style={styles.line}>
       <View style={styles.lineTop}>
-        <View style={{ flex: 1 }}>
+        {/* The name opens the edit sheet. A whole-row press would fight the
+            action buttons sitting inside the same row. */}
+        <Pressable
+          onPress={onEdit}
+          disabled={disabled}
+          style={({ pressed }) => [{ flex: 1 }, pressed && { opacity: 0.6 }]}
+          accessibilityLabel={`Edit ${line.service_name}`}
+        >
           <Text style={[styles.lineName, refunded && styles.struck]} numberOfLines={2}>
             {line.service_name}
             {line.quantity > 1 ? `  ×${line.quantity}` : ''}
+            <Text style={styles.editHint}>{'  ✎'}</Text>
           </Text>
           <Text style={[boardLabel, styles.lineStatus, { color: tone }]}>
             {SERVICE_STATUS_LABELS[line.status]}
           </Text>
+        </Pressable>
+        {/* A discounted line shows what the customer paid, with the board
+            price struck above it. */}
+        <View style={styles.priceCol}>
+          {line.discount_centavos > 0 ? (
+            <Text style={styles.priceWas}>{formatPeso(line.line_total_centavos)}</Text>
+          ) : null}
+          <Text style={[styles.linePrice, refunded && styles.struck]}>
+            {formatPeso(line.net_total_centavos)}
+          </Text>
+          {line.discount_centavos > 0 ? (
+            <Text style={styles.priceOff}>{line.discount_rate_bp / 100}% off</Text>
+          ) : null}
         </View>
-        <Text style={[styles.linePrice, refunded && styles.struck]}>
-          {formatPeso(line.line_total_centavos)}
-        </Text>
       </View>
 
       <View style={styles.actions}>
@@ -473,6 +579,15 @@ const styles = StyleSheet.create({
   lineTop: { flexDirection: 'row', alignItems: 'flex-start', gap: space(3) },
   lineName: { color: colors.chalk, fontSize: 14 },
   lineStatus: { fontSize: 10, marginTop: 3 },
+  editHint: { color: colors.faint, fontSize: 12 },
+  priceCol: { alignItems: 'flex-end' },
+  priceWas: {
+    color: colors.faint,
+    fontSize: 11,
+    fontWeight: '600',
+    textDecorationLine: 'line-through',
+  },
+  priceOff: { color: colors.red, fontSize: 10, fontWeight: '700' },
   linePrice: { color: colors.chalk, fontSize: 14, fontWeight: '700' },
   struck: { textDecorationLine: 'line-through', color: colors.muted },
 

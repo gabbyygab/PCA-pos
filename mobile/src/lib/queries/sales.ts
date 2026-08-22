@@ -16,6 +16,8 @@ export interface SaleRow {
   /** The label printed at sale time, not a live size reference. */
   size: SizeLabel
   plate_number: string | null
+  /** What the vehicle is, as the cashier typed it — "Toyota Vios". */
+  vehicle_note: string | null
   payment_method: PaymentMethod
   voided_at: string | null
   employees: { name: string } | null
@@ -37,7 +39,7 @@ export function useTodaySales(limit = 30) {
       const { data, error } = await supabase
         .from('sales')
         .select(
-          'id, receipt_no, sold_at, total_centavos, commission_centavos, vehicle_class, size, plate_number, payment_method, voided_at, employees (name), sale_items (service_name, quantity, line_total_centavos)'
+          'id, receipt_no, sold_at, total_centavos, commission_centavos, vehicle_class, size, plate_number, vehicle_note, payment_method, voided_at, employees (name), sale_items (service_name, quantity, line_total_centavos)'
         )
         .order('sold_at', { ascending: false })
         .limit(limit)
@@ -56,6 +58,14 @@ export interface CreateSaleInput {
   lines: CartLine[]
   paymentMethod: PaymentMethod
   plateNumber?: string
+  /** What the vehicle is. Stored on `sales.vehicle_note`. */
+  vehicleNote?: string
+  /**
+   * A promo percentage off the whole ticket, in basis points (2000 = 20%).
+   * Postgres applies and rounds it per line, and pointedly does NOT apply it
+   * to commission — the crew is paid on the undiscounted price.
+   */
+  discountRateBp?: number
 }
 
 /**
@@ -75,6 +85,8 @@ export function useCreateSale() {
         p_size: input.size,
         p_payment_method: input.paymentMethod,
         p_plate_number: input.plateNumber || undefined,
+        p_vehicle_note: input.vehicleNote || undefined,
+        p_discount_rate_bp: input.discountRateBp ?? 0,
         p_items: input.lines.map((line) => ({
           // A custom line has no catalogue row behind it, so it posts a null
           // service_id and its typed note folded into the stored name.
