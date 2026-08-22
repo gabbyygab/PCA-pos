@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { toDateKey, weekEndExclusive, weekStart } from '@shared/lib/payroll'
+import type { ServiceStatus } from '@shared/lib/domain'
 import type { Tables } from '@shared/types/database'
 
 export const payrollKey = ['payroll'] as const
@@ -58,7 +59,7 @@ export function usePayrollWeek(anchor: Date) {
       const { data: items, error: itemsError } = await supabase
         .from('sale_item_commissions')
         .select(
-          'employee_id, sale_id, commission_centavos, employees (name), sale_items!inner (line_total_centavos), sales!inner (sold_at, voided_at)'
+          'employee_id, sale_id, commission_centavos, employees (name), sale_items!inner (effective_total_centavos, status), sales!inner (sold_at, voided_at)'
         )
         .gte('sales.sold_at', start.toISOString())
         .lt('sales.sold_at', weekEndExclusive(anchor).toISOString())
@@ -71,7 +72,7 @@ export function usePayrollWeek(anchor: Date) {
           employee_id: string
           sale_id: string
           commission_centavos: number
-          sale_items: { line_total_centavos: number } | null
+          sale_items: { effective_total_centavos: number; status: ServiceStatus } | null
           employees: { name: string } | null
         }
         const existing = byEmployee.get(row.employee_id) ?? {
@@ -83,9 +84,18 @@ export function usePayrollWeek(anchor: Date) {
           saleIds: new Set<string>(),
         }
         // Gross credits each crew member the full line: it measures the work
-        // done on the car, while only the commission is split.
-        existing.grossCentavos += row.sale_items?.line_total_centavos ?? 0
-        existing.commissionCentavos += row.commission_centavos
+        // done on the car, while only the commission is split. The `effective_`
+        // column, matching what `finalize_payroll_period` sums -- it is 0 until
+        // the line is `done` and carries the post-promo price, so this screen
+        // and the slip it generates cannot disagree.
+        existing.grossCentavos += row.sale_items?.effective_total_centavos ?? 0
+        // The crew's cut is reversed for a line that is not `done`, the same
+        // rule the finalizer applies through its join. A share row exists from
+        // the moment the line is rung up, so without this a pending wax would
+        // read as money already earned.
+        if (row.sale_items?.status === 'done') {
+          existing.commissionCentavos += row.commission_centavos
+        }
         existing.saleIds.add(row.sale_id)
         byEmployee.set(row.employee_id, existing)
       }

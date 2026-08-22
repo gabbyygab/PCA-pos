@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { payrollKey } from '@/lib/queries/payroll'
 import { toDateKey, weekEndExclusive, weekStart } from '@shared/lib/payroll'
-import type { SizeLabel } from '@shared/lib/domain'
+import type { ServiceStatus, SizeLabel } from '@shared/lib/domain'
 import type { Tables } from '@shared/types/database'
 
 /**
@@ -25,9 +25,21 @@ export interface PayrollLine {
   serviceName: string
   size: SizeLabel
   plateNumber: string | null
+  /** What was charged for the line, whatever became of it afterwards. */
   lineTotalCentavos: number
-  /** This employee's share only, not the crew's whole commission. */
+  /** The charged price once the line is `done`, else 0 — what gross sums. */
+  effectiveTotalCentavos: number
+  /**
+   * This employee's share only, not the crew's whole commission — and already
+   * reversed to 0 unless the line is `done`, matching what the finalizer pays.
+   */
   commissionCentavos: number
+  /**
+   * The line's own status, so a slip can show a refunded or still-pending car
+   * rather than silently dropping it. A line that earned nothing still explains
+   * why the week's total is what it is.
+   */
+  status: ServiceStatus
   crewSize: number
 }
 
@@ -76,7 +88,7 @@ export function usePayrollDetail(anchor: Date, enabled = true) {
       const { data, error } = await supabase
         .from('sale_item_commissions')
         .select(
-          'employee_id, sale_id, commission_centavos, crew_size, employees (name), sale_items!inner (service_name, size, line_total_centavos), sales!inner (receipt_no, sold_at, plate_number, voided_at)'
+          'employee_id, sale_id, commission_centavos, crew_size, employees (name), sale_items!inner (service_name, size, line_total_centavos, effective_total_centavos, status), sales!inner (receipt_no, sold_at, plate_number, voided_at)'
         )
         .gte('sales.sold_at', start.toISOString())
         .lt('sales.sold_at', weekEndExclusive(anchor).toISOString())
@@ -93,6 +105,8 @@ export function usePayrollDetail(anchor: Date, enabled = true) {
           service_name: string
           size: SizeLabel
           line_total_centavos: number
+          effective_total_centavos: number
+          status: ServiceStatus
         } | null
         sales: { receipt_no: number; sold_at: string; plate_number: string | null } | null
       }
@@ -121,7 +135,17 @@ export function usePayrollDetail(anchor: Date, enabled = true) {
           size: row.sale_items.size,
           plateNumber: row.sales.plate_number,
           lineTotalCentavos: row.sale_items.line_total_centavos,
-          commissionCentavos: row.commission_centavos,
+          effectiveTotalCentavos: row.sale_items.effective_total_centavos,
+          // Only finished work is paid. A generated column cannot reach across
+          // to the line's status, so the reversal the `effective_` columns apply
+          // to sale_items is applied to the crew share here -- the same rule
+          // `finalize_payroll_period` applies through its join. Without it this
+          // screen pays commission on refunded and not-yet-started work, and
+          // disagrees with both the Payroll summary above it and the slip it
+          // prints.
+          commissionCentavos:
+            row.sale_items.status === 'done' ? row.commission_centavos : 0,
+          status: row.sale_items.status,
           crewSize: row.crew_size,
         })
 
@@ -138,8 +162,10 @@ export function usePayrollDetail(anchor: Date, enabled = true) {
 
         for (const line of detail.lines) {
           // Gross credits the full line to each crew member — it measures work
-          // done on the car; only the commission is split.
-          detail.grossCentavos += line.lineTotalCentavos
+          // done on the car; only the commission is split. The `effective_`
+          // column, matching what the finalizer sums: unfinished or refunded
+          // work is not work delivered.
+          detail.grossCentavos += line.effectiveTotalCentavos
           detail.commissionCentavos += line.commissionCentavos
           sales.add(line.saleId)
 

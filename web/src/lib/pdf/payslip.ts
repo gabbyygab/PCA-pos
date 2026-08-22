@@ -138,7 +138,16 @@ export function renderPayslip(
       line.size,
       line.plateNumber ?? '—',
       line.crewSize > 1 ? `${line.crewSize} crew` : 'Solo',
-      pdfPeso(line.lineTotalCentavos),
+      // The charged price with what became of it, not the bare number: only a
+      // `done` line is paid, so a refunded or still-pending car contributes
+      // nothing to either total below. Printing ₱950 against a ₱0 cut with no
+      // explanation reads as a slip that shorted the crew -- the status is what
+      // makes the column add up to its own footer.
+      line.status === 'done'
+        ? pdfPeso(line.lineTotalCentavos)
+        : `${pdfPeso(line.lineTotalCentavos)} (${
+            line.status === 'refunded' ? 'refunded' : 'pending'
+          })`,
       pdfPeso(line.commissionCentavos),
     ])
 
@@ -162,7 +171,8 @@ export function renderPayslip(
         3: { cellWidth: 12, halign: 'center' },
         4: { cellWidth: 20, textColor: MUTED },
         5: { cellWidth: 15, halign: 'center', textColor: MUTED, fontSize: 7.5 },
-        6: { cellWidth: 24, halign: 'right', textColor: MUTED },
+        // Wide enough for the "(refunded)" / "(pending)" annotation.
+        6: { cellWidth: 32, halign: 'right', textColor: MUTED },
         7: { cellWidth: 24, halign: 'right' },
       },
     })

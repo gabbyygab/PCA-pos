@@ -19,8 +19,8 @@ import {
 } from './doc'
 import { emptyNote, houseTable, tableEndY } from './table'
 import { pdfPeso, pdfText } from './text'
-import { CATEGORY_LABELS } from '@shared/lib/domain'
-import type { ReportData, ReportRange } from '@/lib/queries/reports'
+import { CATEGORY_LABELS, PAYMENT_LABELS, type PaymentMethod } from '@shared/lib/domain'
+import type { ReportData, ReportFilters, ReportRange } from '@/lib/queries/reports'
 
 const RANGE_LABELS: Record<ReportRange, string> = {
   '7d': 'Last 7 days',
@@ -40,6 +40,7 @@ const RANGE_LABELS: Record<ReportRange, string> = {
 export function buildSalesReport(
   data: ReportData,
   range: ReportRange,
+  filters: ReportFilters = { payment: 'all' },
   generatedAt = new Date()
 ) {
   const doc = createDoc()
@@ -63,7 +64,12 @@ export function buildSalesReport(
   const meta: DocMeta = {
     title: 'Sales Report',
     subtitle: span,
-    tag: RANGE_LABELS[range],
+    // A filtered report has to say so on its face: printed out, there is
+    // nothing else to tell the reader these are only the GCash sales.
+    tag:
+      filters.payment === 'all'
+        ? RANGE_LABELS[range]
+        : `${RANGE_LABELS[range]} · ${PAYMENT_LABELS[filters.payment]} only`,
   }
 
   masthead(doc, meta)
@@ -181,6 +187,38 @@ export function buildSalesReport(
     y = tableEndY(doc)
   }
 
+  y = sectionTitle(
+    doc,
+    y + 12,
+    'Sales by payment method',
+    'The whole range, regardless of the filter above'
+  )
+  if (data.byPayment.length === 0) {
+    y = emptyNote(doc, y, 'No sales in this range.')
+  } else {
+    const paymentTotal = data.byPayment.reduce((sum, r) => sum + r.grossCentavos, 0)
+    houseTable(doc, {
+      meta,
+      startY: y,
+      head: [['Method', 'Vehicles', 'Share', 'Gross']],
+      body: data.byPayment.map((r) => [
+        PAYMENT_LABELS[r.method],
+        String(r.salesCount),
+        paymentTotal ? `${((r.grossCentavos / paymentTotal) * 100).toFixed(1)}%` : '-',
+        pdfPeso(r.grossCentavos),
+      ]),
+      foot: [['Total', '', '', pdfPeso(paymentTotal)]],
+      accentColumns: [3],
+      columnStyles: {
+        0: { cellWidth: 'auto', fontStyle: 'bold' },
+        1: { cellWidth: 22, halign: 'center', textColor: MUTED },
+        2: { cellWidth: 26, halign: 'right', textColor: MUTED },
+        3: { cellWidth: 34, halign: 'right' },
+      },
+    })
+    y = tableEndY(doc)
+  }
+
   y = sectionTitle(doc, y + 12, 'Expenses', 'Deducted from gross to give net sales')
   if (data.byExpense.length === 0) {
     y = emptyNote(doc, y, 'No expenses recorded in this range.')
@@ -214,13 +252,25 @@ export function buildSalesReport(
   return doc
 }
 
-export function salesReportFilename(range: ReportRange, generatedAt = new Date()): string {
-  return `pca-sales-report-${range}-${generatedAt.toISOString().slice(0, 10)}.pdf`
+export function salesReportFilename(
+  range: ReportRange,
+  payment: PaymentMethod | 'all' = 'all',
+  generatedAt = new Date()
+): string {
+  const suffix = payment === 'all' ? '' : `-${payment}`
+  return `pca-sales-report-${range}${suffix}-${generatedAt.toISOString().slice(0, 10)}.pdf`
 }
 
-export function downloadSalesReport(data: ReportData, range: ReportRange) {
+export function downloadSalesReport(
+  data: ReportData,
+  range: ReportRange,
+  filters: ReportFilters = { payment: 'all' }
+) {
   const now = new Date()
-  savePdf(buildSalesReport(data, range, now), salesReportFilename(range, now))
+  savePdf(
+    buildSalesReport(data, range, filters, now),
+    salesReportFilename(range, filters.payment, now)
+  )
 }
 
 /** A proportional bar drawn inside a table cell, replacing a chart column. */

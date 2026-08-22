@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/Button'
 import { useToast } from '@/components/ui/Toast'
 import { downloadSalesReport } from '@/lib/pdf/salesReport'
 import { Panel, PanelHeader, SlashRule } from '@/components/ui/Panel'
+import { DateField, QuickSpans, spanDays } from '@/components/ui/DateRange'
 import { ReportsSkeleton } from '@/components/ui/Skeleton'
 import {
   dayKeyOf,
@@ -36,9 +37,20 @@ import {
   useTodayReport,
   type ReportData,
   type ReportDateRange,
+  type ReportFilters,
   type ReportRange,
 } from '@/lib/queries/reports'
 import { centavosToPesos, formatPeso } from '@shared/lib/currency'
+import { PAYMENT_LABELS, type PaymentMethod } from '@shared/lib/domain'
+
+/** `all` plus every method, in the order the POS offers them. */
+const PAYMENT_FILTERS: (PaymentMethod | 'all')[] = [
+  'all',
+  'cash',
+  'gcash',
+  'card',
+  'bank_transfer',
+]
 
 const RANGES: { id: ReportRange; label: string }[] = [
   { id: '7d', label: '7 days' },
@@ -52,6 +64,7 @@ const GRID = '#26262b'
 
 export function ReportsTab() {
   const [range, setRange] = useState<ReportRange>('30d')
+  const [filters, setFilters] = useState<ReportFilters>({ payment: 'all' })
   // Seeded from the last preset so switching to Custom starts somewhere sane
   // rather than on an empty pair of fields.
   const [custom, setCustom] = useState<ReportDateRange>(() => {
@@ -66,9 +79,14 @@ export function ReportsTab() {
       ? 'The start date is after the end date.'
       : undefined
 
-  const { data, isLoading, isError, error } = useReports(range, rangeError ? undefined : custom)
-  // Always today, whatever the range above is set to.
-  const { data: todayData } = useTodayReport()
+  const { data, isLoading, isError, error } = useReports(
+    range,
+    rangeError ? undefined : custom,
+    filters
+  )
+  // Always today, whatever the range above is set to — and narrowed by the same
+  // payment filter, so the two bands answer the same question.
+  const { data: todayData } = useTodayReport(filters)
   const { toast } = useToast()
 
   const today = useMemo(() => dayKeyOf(new Date()), [])
@@ -76,7 +94,7 @@ export function ReportsTab() {
   function onExport() {
     if (!data) return
     try {
-      downloadSalesReport(data, range)
+      downloadSalesReport(data, range, filters)
       toast({ message: 'Report exported', detail: 'Saved as PDF.', tone: 'success' })
     } catch (error) {
       toast({
@@ -140,20 +158,7 @@ export function ReportsTab() {
               max={today}
               onChange={(to) => setCustom((c) => ({ ...c, to }))}
             />
-            <div className="flex gap-1.5 pb-0.5">
-              {QUICK_SPANS.map((span) => (
-                <button
-                  key={span.label}
-                  onClick={() => setCustom(span.build())}
-                  className={cn(
-                    'rounded-md border border-line bg-surface px-2.5 py-1.5 text-[11px] font-semibold text-muted',
-                    'transition-colors duration-150 hover:border-line-strong hover:text-chalk'
-                  )}
-                >
-                  {span.label}
-                </button>
-              ))}
-            </div>
+            <QuickSpans onPick={setCustom} />
             {rangeError ? (
               <p className="pb-2 text-xs font-semibold text-red">{rangeError}</p>
             ) : (
@@ -164,6 +169,37 @@ export function ReportsTab() {
             )}
           </div>
         ) : null}
+
+        {/* Payment sits on its own row rather than beside the range buttons:
+            it narrows what the numbers cover, the same way the dates do, and
+            burying it in the same cluster made a filtered report look unfiltered
+            at a glance. The active chip is what says the page is narrowed. */}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="board-label text-[10px] text-faint">Payment</span>
+          <div className="flex flex-wrap gap-1.5">
+            {PAYMENT_FILTERS.map((method) => (
+              <button
+                key={method}
+                onClick={() => setFilters((f) => ({ ...f, payment: method }))}
+                className={cn(
+                  'rounded-lg border px-3 py-1.5 text-xs font-semibold',
+                  'transition-[transform,background-color,border-color,color] duration-150 [transition-timing-function:var(--ease-out-strong)]',
+                  'active:scale-[0.97]',
+                  filters.payment === method
+                    ? 'border-red bg-red/12 text-chalk'
+                    : 'border-line bg-surface text-muted hover:border-line-strong hover:text-chalk'
+                )}
+              >
+                {method === 'all' ? 'All' : PAYMENT_LABELS[method]}
+              </button>
+            ))}
+          </div>
+          {filters.payment !== 'all' ? (
+            <p className="text-[11px] text-faint">
+              Every figure below counts {PAYMENT_LABELS[filters.payment]} sales only.
+            </p>
+          ) : null}
+        </div>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
@@ -202,7 +238,7 @@ export function ReportsTab() {
               <Stat
                 label="Gross sales"
                 value={formatPeso(data.grossCentavos)}
-                sub="Refunds already removed"
+                sub="Completed services only"
               />
               <Stat label="Expenses" value={`- ${formatPeso(data.expenseCentavos)}`} />
               {/* Net carries the accent, not gross: it is the number the owner
@@ -238,7 +274,11 @@ export function ReportsTab() {
                 value={String(data.pendingCount)}
                 icon={Clock}
                 tone={data.pendingCount > 0 ? 'warn' : undefined}
-                sub={data.pendingCount > 0 ? 'Services not closed out' : 'All work closed out'}
+                sub={
+                  data.pendingCount > 0
+                    ? `${formatPeso(data.pendingCentavos)} not counted yet`
+                    : 'All work closed out'
+                }
               />
               <Stat
                 label="Refunded"
@@ -397,6 +437,70 @@ export function ReportsTab() {
 
             <Panel>
               <PanelHeader
+                title="Sales by payment method"
+                hint="Always the whole range, whatever the payment filter above is set to — this is the panel the filter is chosen from."
+              />
+              {data.byPayment.length === 0 ? (
+                <p className="px-4 py-6 text-sm text-faint">No sales in this range.</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-line text-left">
+                      <Th>Method</Th>
+                      <Th className="text-right">Vehicles</Th>
+                      <Th className="text-right">Share</Th>
+                      <Th className="text-right">Gross</Th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {data.byPayment.map((row) => {
+                      // Against the range's own total, not `data.grossCentavos`
+                      // — that one moves with the filter, and a share computed
+                      // against a filtered denominator would read 100% for the
+                      // method being filtered to.
+                      const total = data.byPayment.reduce(
+                        (sum, r) => sum + r.grossCentavos,
+                        0
+                      )
+                      const active = filters.payment === row.method
+                      return (
+                        <tr
+                          key={row.method}
+                          onClick={() =>
+                            setFilters((f) => ({
+                              // Clicking the active row clears the filter, so the
+                              // table is a toggle rather than a one-way trip.
+                              ...f,
+                              payment: active ? 'all' : row.method,
+                            }))
+                          }
+                          className={cn(
+                            'cursor-pointer transition-colors duration-150 hover:bg-surface-2',
+                            active && 'bg-red/8'
+                          )}
+                        >
+                          <td className="px-4 py-3 font-semibold text-chalk">
+                            {PAYMENT_LABELS[row.method]}
+                          </td>
+                          <td className="tnum px-4 py-3 text-right text-muted">
+                            {row.salesCount}
+                          </td>
+                          <td className="tnum px-4 py-3 text-right text-muted">
+                            {total ? `${((row.grossCentavos / total) * 100).toFixed(1)}%` : '—'}
+                          </td>
+                          <td className="tnum px-4 py-3 text-right font-bold text-red">
+                            {formatPeso(row.grossCentavos)}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </Panel>
+
+            <Panel>
+              <PanelHeader
                 title="Expenses"
                 hint="Grouped by name as typed. Subtracted from gross to give net sales."
               />
@@ -451,103 +555,6 @@ export function ReportsTab() {
   )
 }
 
-/**
- * Quick spans for the custom picker — the periods the owner actually asks for
- * (a calendar month, the month so far) which no fixed "last N days" preset
- * expresses.
- */
-const QUICK_SPANS: { label: string; build: () => ReportDateRange }[] = [
-  {
-    label: 'This month',
-    build: () => {
-      const now = new Date()
-      return {
-        from: dayKeyOf(new Date(now.getFullYear(), now.getMonth(), 1)),
-        to: dayKeyOf(now),
-      }
-    },
-  },
-  {
-    label: 'Last month',
-    build: () => {
-      const now = new Date()
-      return {
-        from: dayKeyOf(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
-        // Day 0 of this month is the last day of the previous one.
-        to: dayKeyOf(new Date(now.getFullYear(), now.getMonth(), 0)),
-      }
-    },
-  },
-  {
-    label: 'This year',
-    build: () => {
-      const now = new Date()
-      return { from: dayKeyOf(new Date(now.getFullYear(), 0, 1)), to: dayKeyOf(now) }
-    },
-  },
-]
-
-/** Inclusive day count, so a single-day range reads as 1 rather than 0. */
-function spanDays(range: ReportDateRange): number {
-  if (!range.from || !range.to) return 0
-  const from = new Date(`${range.from}T00:00:00`)
-  const to = new Date(`${range.to}T00:00:00`)
-  return Math.max(0, Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1)
-}
-
-/**
- * A native date input, deliberately.
- *
- * `ui/README.md` bans native `<select>` because the OS draws its popup and
- * ignores the app's tokens. A date input is not the same case: the field itself
- * is ours to style, and the calendar popup it opens is the one piece of OS
- * chrome worth keeping — it handles month lengths, locales, and keyboard entry
- * far better than a hand-rolled calendar would.
- */
-function DateField({
-  id,
-  label,
-  value,
-  min,
-  max,
-  onChange,
-}: {
-  id: string
-  label: string
-  value: string
-  min?: string
-  max?: string
-  onChange: (value: string) => void
-}) {
-  return (
-    <div className="min-w-0">
-      <label htmlFor={id} className="board-label block text-[10px] text-faint">
-        {label}
-      </label>
-      <input
-        id={id}
-        type="date"
-        value={value}
-        min={min}
-        max={max}
-        onChange={(e) => onChange(e.target.value)}
-        className={cn(
-          'tnum mt-1.5 h-9 rounded-lg border border-line bg-surface-2 px-2.5 text-sm text-chalk',
-          'transition-colors duration-150 [transition-timing-function:var(--ease-out-strong)]',
-          'hover:border-line-strong focus:border-red focus:outline-none',
-          // The picker glyph is drawn black-on-black by the webview otherwise.
-          '[&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:invert'
-        )}
-      />
-    </div>
-  )
-}
-
-/**
- * Recharts hands the formatter a loose ValueType, so coerce before formatting.
- * The series name comes back as the second argument — the daily chart plots
- * both gross and net, so labelling every row "Gross" would misread one line.
- */
 function pesoTooltip(value: unknown, name?: unknown): [string, string] {
   const pesos = typeof value === 'number' ? value : Number(value ?? 0)
   const label = typeof name === 'string' && name ? name : 'Gross'

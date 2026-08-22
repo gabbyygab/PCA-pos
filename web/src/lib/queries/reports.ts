@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import type {
+  PaymentMethod,
   ServiceCategory,
   ServiceStatus,
   SizeLabel,
@@ -10,6 +11,20 @@ import type {
 } from '@shared/lib/domain'
 
 export const reportsKey = ['reports'] as const
+
+/**
+ * How a report is narrowed beyond its date range.
+ *
+ * `payment` is `'all'` or one method. Kept as a discrete value rather than a
+ * set because the question the owner asks is "how much of this was GCash",
+ * one method at a time; a multi-select would make the tiles answer a question
+ * nobody asked and the breakdown below already shows every method at once.
+ */
+export interface ReportFilters {
+  payment: PaymentMethod | 'all'
+}
+
+export const NO_FILTERS: ReportFilters = { payment: 'all' }
 
 /** The presets, plus `custom` for an owner-chosen span. */
 export type ReportRange = '7d' | '30d' | '90d' | 'custom'
@@ -87,6 +102,14 @@ export interface ReportData {
   /** Service lines refunded, and what was handed back. */
   refundedCount: number
   refundedCentavos: number
+  /**
+   * What the pending lines would be worth once the crew closes them out.
+   *
+   * Not revenue — only a `done` line counts — but the owner still needs to see
+   * the money standing on the lot, or a busy afternoon of unfinished work reads
+   * as a dead day.
+   */
+  pendingCentavos: number
   /** Daily operating costs recorded in the range. Always positive. */
   expenseCentavos: number
   /**
@@ -116,6 +139,15 @@ export interface ReportData {
   byEmployee: { name: string; grossCentavos: number; commissionCentavos: number; salesCount: number }[]
   /** Expenses grouped by the name as typed, biggest first. */
   byExpense: { name: string; amountCentavos: number; count: number }[]
+  /**
+   * Gross split by how the customer paid, biggest first.
+   *
+   * Always computed across every method the range contains, even when the page
+   * is filtered to one -- filtering to GCash and then reading a breakdown that
+   * only lists GCash would be a tautology. The filter narrows the tiles; this
+   * panel is what the filter is chosen from.
+   */
+  byPayment: { method: PaymentMethod; grossCentavos: number; salesCount: number }[]
 }
 
 /**
@@ -128,42 +160,75 @@ export interface ReportData {
  * off it. It reuses `useReports` with a one-day custom range, so the two read
  * the same maths and a refund reverses in both.
  */
-export function useTodayReport() {
+export function useTodayReport(filters: ReportFilters = NO_FILTERS) {
   const key = dayKeyOf(new Date())
-  return useReports('custom', { from: key, to: key })
+  return useReports('custom', { from: key, to: key }, filters)
 }
 
-export function useReports(range: ReportRange, custom?: ReportDateRange) {
+export function useReports(
+  range: ReportRange,
+  custom?: ReportDateRange,
+  filters: ReportFilters = NO_FILTERS
+) {
   return useQuery({
-    queryKey: [...reportsKey, range, custom?.from ?? null, custom?.to ?? null],
+    queryKey: [
+      ...reportsKey,
+      range,
+      custom?.from ?? null,
+      custom?.to ?? null,
+      filters.payment,
+    ],
     // A half-entered custom range would query a nonsense window.
     enabled: range !== 'custom' || Boolean(custom?.from && custom?.to),
     queryFn: async (): Promise<ReportData> => {
       const supabase = createClient()
       const { start: since, endExclusive, days } = resolveRange(range, custom)
 
-      const { data, error } = await supabase
+      // The payment filter is applied to the embedded `sales` row rather than
+      // in TypeScript, so a narrowed report is a smaller response rather than a
+      // full one thrown away client-side.
+      let itemQuery = supabase
         .from('sale_items')
         .select(
-          'service_name, category, size, status, line_total_centavos, effective_total_centavos, commission_centavos, effective_commission_centavos, sale_id, sales!inner (sold_at, voided_at, vehicle_class)'
+          'service_name, category, size, status, line_total_centavos, net_total_centavos, effective_total_centavos, commission_centavos, effective_commission_centavos, sale_id, sales!inner (sold_at, voided_at, vehicle_class, payment_method)'
         )
         .gte('sales.sold_at', since.toISOString())
         .lt('sales.sold_at', endExclusive.toISOString())
         .is('sales.voided_at', null)
+      if (filters.payment !== 'all') {
+        itemQuery = itemQuery.eq('sales.payment_method', filters.payment)
+      }
+      const { data, error } = await itemQuery
       if (error) throw error
 
       // Per-employee numbers come from the crew shares. A car worked by three
       // people owes each of them a share, so grouping sale_items by its lead
       // employee would credit one person for the whole crew's work.
-      const { data: crewData, error: crewError } = await supabase
+      let crewQuery = supabase
         .from('sale_item_commissions')
         .select(
-          'commission_centavos, sale_id, employees (name), sale_items!inner (line_total_centavos, effective_total_centavos, status), sales!inner (sold_at, voided_at)'
+          'commission_centavos, sale_id, employees (name), sale_items!inner (line_total_centavos, effective_total_centavos, status), sales!inner (sold_at, voided_at, payment_method)'
         )
         .gte('sales.sold_at', since.toISOString())
         .lt('sales.sold_at', endExclusive.toISOString())
         .is('sales.voided_at', null)
+      if (filters.payment !== 'all') {
+        crewQuery = crewQuery.eq('sales.payment_method', filters.payment)
+      }
+      const { data: crewData, error: crewError } = await crewQuery
       if (crewError) throw crewError
+
+      // The payment breakdown is deliberately NOT narrowed by `filters.payment`:
+      // it is the panel the filter is chosen from, so it always describes the
+      // whole range. Read off `sales` rather than the line rows above because a
+      // ticket has one payment method however many services are on it.
+      const { data: paymentData, error: paymentError } = await supabase
+        .from('sales')
+        .select('id, payment_method, sale_items (effective_total_centavos)')
+        .gte('sold_at', since.toISOString())
+        .lt('sold_at', endExclusive.toISOString())
+        .is('voided_at', null)
+      if (paymentError) throw paymentError
 
       // Expenses are keyed on a plain `spent_on` date, not a timestamp, so the
       // span is filtered with day keys rather than the instants used above.
@@ -194,18 +259,25 @@ export function useReports(range: ReportRange, custom?: ReportDateRange) {
         size: SizeLabel
         status: ServiceStatus
         line_total_centavos: number
-        /** 0 once refunded — this is what every total below sums. */
+        /** What the customer owes: line_total less any promo. */
+        net_total_centavos: number
+        /** The charged price once the line is `done`, else 0 — what every total below sums. */
         effective_total_centavos: number
         commission_centavos: number
         effective_commission_centavos: number
         sale_id: string
-        sales: { sold_at: string; vehicle_class: VehicleClass } | null
+        sales: {
+          sold_at: string
+          vehicle_class: VehicleClass
+          payment_method: PaymentMethod
+        } | null
       }
       const rows = (data ?? []) as unknown as Row[]
 
       let grossCentavos = 0
       let commissionCentavos = 0
       let pendingCount = 0
+      let pendingCentavos = 0
       let refundedCount = 0
       let refundedCentavos = 0
       const saleIds = new Set<string>()
@@ -229,18 +301,26 @@ export function useReports(range: ReportRange, custom?: ReportDateRange) {
       }
 
       for (const row of rows) {
-        // Every total reads the effective column, so a refunded line stops
-        // counting toward revenue the moment the cashier marks it.
+        // Every total reads the effective column, so a line counts as revenue
+        // only once the crew marks it done, and stops counting if refunded.
         grossCentavos += row.effective_total_centavos
         commissionCentavos += row.effective_commission_centavos
         saleIds.add(row.sale_id)
 
-        if (row.status === 'pending') pendingCount += 1
+        if (row.status === 'pending') {
+          pendingCount += 1
+          // The effective column is 0 for a pending line by definition, so the
+          // charged price is what says how much work is still open. The NET
+          // price: this tile is what the shop stands to collect, and a promo
+          // has already been conceded on it.
+          pendingCentavos += row.net_total_centavos
+        }
         if (row.status === 'refunded') {
           refundedCount += 1
-          // The original price is what was handed back; the effective column
-          // is already zero by this point.
-          refundedCentavos += row.line_total_centavos
+          // What was handed back is what the customer actually paid, so the
+          // net price -- refunding a discounted line does not return the
+          // pre-promo amount. The effective column is already zero here.
+          refundedCentavos += row.net_total_centavos
         }
 
         if (row.sales?.vehicle_class === 'motorcycle') {
@@ -285,8 +365,11 @@ export function useReports(range: ReportRange, custom?: ReportDateRange) {
         emp.grossCentavos += row.sale_items?.effective_total_centavos ?? 0
         // A generated column cannot see across to the line's status, so the
         // refund reversal for crew shares is applied here.
+        // Only finished work is paid. A generated column cannot see across to
+        // the line's status, so the same rule the effective_ columns apply is
+        // applied here by hand.
         emp.commissionCentavos +=
-          row.sale_items?.status === 'refunded' ? 0 : row.commission_centavos
+          row.sale_items?.status === 'done' ? row.commission_centavos : 0
         emp.sales.add(row.sale_id)
         employees.set(name, emp)
       }
@@ -310,6 +393,28 @@ export function useReports(range: ReportRange, custom?: ReportDateRange) {
         expenseNames.set(name, entry)
       }
 
+      type PaymentRow = {
+        id: string
+        payment_method: PaymentMethod
+        sale_items: { effective_total_centavos: number }[] | null
+      }
+      const payments = new Map<PaymentMethod, { grossCentavos: number; sales: Set<string> }>()
+      for (const row of (paymentData ?? []) as unknown as PaymentRow[]) {
+        const entry = payments.get(row.payment_method) ?? {
+          grossCentavos: 0,
+          sales: new Set<string>(),
+        }
+        // Summed from the lines, not `sales.total_centavos`: the header is
+        // resummed by a trigger and the lines are the same source every other
+        // figure on this page reads.
+        entry.grossCentavos += (row.sale_items ?? []).reduce(
+          (sum, item) => sum + (item.effective_total_centavos ?? 0),
+          0
+        )
+        entry.sales.add(row.id)
+        payments.set(row.payment_method, entry)
+      }
+
       const salesCount = saleIds.size
 
       return {
@@ -319,6 +424,7 @@ export function useReports(range: ReportRange, custom?: ReportDateRange) {
         pendingCount,
         refundedCount,
         refundedCentavos,
+        pendingCentavos,
         expenseCentavos,
         netCentavos: grossCentavos - expenseCentavos,
         commissionCentavos,
@@ -354,6 +460,13 @@ export function useReports(range: ReportRange, custom?: ReportDateRange) {
         byExpense: [...expenseNames.entries()]
           .map(([name, v]) => ({ name, ...v }))
           .sort((a, b) => b.amountCentavos - a.amountCentavos),
+        byPayment: [...payments.entries()]
+          .map(([method, v]) => ({
+            method,
+            grossCentavos: v.grossCentavos,
+            salesCount: v.sales.size,
+          }))
+          .sort((a, b) => b.grossCentavos - a.grossCentavos),
       }
     },
   })
