@@ -23,6 +23,16 @@ interface ModalProps {
  * of. Entry animates with `@starting-style`, matching the Select list — no
  * mount effect, and reduced-motion users get the opacity change without the
  * scale.
+ *
+ * The card is capped at the viewport and splits into three bands: the title
+ * and the footer hold their place while only the body scrolls. Without the cap
+ * a tall dialog simply grew past the screen, putting Save somewhere below the
+ * bottom edge with no way to reach it — the page behind is `overflow-hidden`,
+ * so there was nothing to scroll. Capping the card rather than each dialog's
+ * body means a dialog cannot reintroduce the problem by adding a field.
+ *
+ * `min-h-0` on the scroller is what actually lets it shrink: a flex child's
+ * floor is its content, and it will not go below that without it.
  */
 export function Modal({ title, hint, onClose, children, footer, className }: ModalProps) {
   const cardRef = useRef<HTMLDivElement>(null)
@@ -59,13 +69,13 @@ export function Modal({ title, hint, onClose, children, footer, className }: Mod
         aria-modal="true"
         aria-label={title}
         className={cn(
-          'w-full max-w-sm rounded-xl border border-line-strong bg-surface p-5 shadow-2xl outline-none',
+          'flex max-h-[calc(100dvh-2rem)] w-full max-w-sm flex-col rounded-xl border border-line-strong bg-surface p-5 shadow-2xl outline-none',
           'scale-100 opacity-100 transition-[opacity,transform] duration-200',
           '[transition-timing-function:var(--ease-out-strong)] starting:scale-[0.96] starting:opacity-0',
           className
         )}
       >
-        <div className="flex items-start gap-3">
+        <div className="flex shrink-0 items-start gap-3">
           <div className="min-w-0 flex-1">
             <h2 className="board-head text-lg text-chalk">{title}</h2>
             {hint ? <p className="mt-1.5 text-xs text-muted">{hint}</p> : null}
@@ -80,8 +90,12 @@ export function Modal({ title, hint, onClose, children, footer, className }: Mod
             <X size={16} />
           </button>
         </div>
-        {children}
-        {footer ? <div className="mt-4 flex gap-2">{footer}</div> : null}
+        {/* `-mx-5 px-5` lets a focus ring on an edge control breathe instead
+            of being clipped by the scroll container. */}
+        <div className="-mx-5 min-h-0 flex-1 overflow-y-auto px-5">{children}</div>
+        {footer ? (
+          <div className="mt-4 flex shrink-0 gap-2 border-t border-line pt-4">{footer}</div>
+        ) : null}
       </div>
     </div>
   )
