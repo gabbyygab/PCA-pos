@@ -67,7 +67,10 @@ because the cashier app computes the same totals.
 
 `mobile/` is ringing up sales, recording the work, and logging the day's costs
 — there is no payroll, reports, or settings screen to reach, and the restriction
-is structural rather than a UI check. RLS is the real boundary: both clients ship the same anon key
+is structural rather than a UI check. The cashier can edit a line (tap its name
+on the Services screen) but never delete one: `delete_sale_items` is owner-only
+in Postgres, so the app has nothing to call and offers no button that would
+tap into a refusal. RLS is the real boundary: both clients ship the same anon key
 to the device, so what stops a cashier reading payroll is their JWT, never this
 bundle's lack of a screen.
 
@@ -300,24 +303,144 @@ The split math is `shareOfCommission` / `cartShare` in `shared/lib/pricing.ts`,
 mirrored exactly by `create_sale` in Postgres — the cashier app must compute
 the same numbers.
 
+### Promo discounts
+
+A promo takes a **percentage off what the customer pays and nothing off what the
+crew earns**. That asymmetry is the whole feature, and it is why the discount is
+never subtracted from the price: `commission_centavos` derives from
+`line_total_centavos`, so discounting in place would drag the employee cut down
+with it. The crew washed the same car either way — the promo is the shop's
+concession to the customer, not theirs.
+
+So a line keeps two numbers where it used to keep one:
+
+| Column | Meaning |
+| --- | --- |
+| `line_total_centavos` | the **pre-promo** price — the commission base |
+| `discount_centavos` | pesos taken off, rounded **down** per line |
+| `discount_rate_bp` | the percentage as applied (2000 = 20%), snapshotted |
+| `net_total_centavos` | generated: what the customer actually owes |
+
+Everything downstream then follows from which column a reader already used:
+`effective_total_centavos` carries the **net**, so gross, net sales, average
+ticket, best services, sales-by-size and the payment breakdown all fall to the
+discounted figure; `effective_commission_centavos` still derives from the
+**undiscounted** total, so payroll and the employee-cut tile never move. No
+report had to learn the word "promo".
+
+The discount is stored **per line** even though the cashier types one percentage
+for the ticket ("20% off" is said about the car). Reports sum
+`effective_total_centavos` off `sale_items` and never read
+`sales.total_centavos`, so a header-only discount would be invisible to every
+figure on the Reports tab. Per-line also means a promo survives `edit_sale_item`
+and per-line refunds with no special handling.
+
+Rounding is the **mirror image** of the commission split: a crew share rounds
+**up** so an uneven split never shorts the crew, a discount rounds **down** so
+an uneven percentage never hands back more than the promo promised. Each rounds
+toward whoever did not choose the arithmetic. `lineDiscount` / `cartDiscount` in
+`shared/lib/pricing.ts` mirror `create_sale` exactly.
+
+`create_sale` takes `p_discount_rate_bp` (defaulting to 0) and applies it per
+line. **The old 7-argument overload was dropped** — PostgREST resolves an RPC by
+the argument names posted, so leaving it would have let a stale client silently
+write no discount. Both clients must send the parameter.
+
+`set_sale_discount(sale_id, rate_bp)` applies or removes a promo on an
+already-rung ticket, for the case remembered at the counter after the lines are
+in. It is separate from `edit_sale_ticket` because that function writes only
+`sales` and is documented as never touching a money column. Like every other
+correction, cashiers reach today only. The promo **rate** is not editable
+through `edit_sale_item`, for the same reason `commission_rate_bp` is not: both
+are snapshotted so nothing rewrites history after the fact.
+
+A note on the live Payroll tab: its gross previously summed
+`line_total_centavos` with no status filter, while `finalize_payroll_period`
+sums `effective_total_centavos` for `done` lines only — so the screen and the
+slip it generated disagreed about pending and refunded work. Both now read the
+effective column, which also keeps the promo from inflating a payroll gross.
+
 ### Service status and refunds
 
 A sale is not one atomic fact — the shop works a car one service at a time. Each
 row in `sale_items` carries a **`status`**: `pending` → `done` → `refunded`.
 
+**Only a `done` line is revenue.** Two generated columns,
+`effective_total_centavos` and `effective_commission_centavos`, carry the
+charged amount when the status is `done` and **0 otherwise** — so a `pending`
+line is work in progress, not money, and contributes nothing to gross, net,
+commission, or payroll until the crew closes it out. The rule is positive
+rather than negative, which is what separates the two non-earning states:
+`pending` is "not yet", `refunded` is "not any more". Every report sums those
+columns, never `line_total_centavos`, which stays on the row as the record of
+what was actually charged. See
+`supabase/migrations/20260820_done_is_revenue.sql`.
+
+Because the pending money is invisible in gross, Reports shows it as its own
+figure (`pendingCentavos`) under the "In progress" tile — otherwise a busy
+afternoon of unfinished work reads as a dead day.
+
 A refund is **not a delete**. The line stays on the ticket, struck through, so
-the receipt still shows what was ordered. What changes is that the money stops
-counting: two generated columns, `effective_total_centavos` and
-`effective_commission_centavos`, read 0 once the line is refunded, and every
-report sums **those**, never `line_total_centavos`. The original price stays on
-the row as the record of what was actually charged.
+the receipt still shows what was ordered.
+
+A **delete** is the other case: the line should never have been on the ticket
+(rung up on the wrong car, double-tapped), so leaving it struck through would
+misrepresent what the customer was offered. `delete_sale_items` removes the
+rows and their crew shares for good, resums each affected header, and **voids a
+ticket left with no lines** — an empty ticket is a sale that did not happen, not
+a ₱0 one. It is **owner-only on every day**, deliberately narrower than
+`set_service_status` and `edit_sale_item`: a cashier's correction path stays
+"refund", which leaves the mistake visible.
 
 Crew shares in `sale_item_commissions` get no such column — a generated column
 cannot reach another table to see its line's status — so the reversal for shares
 is applied by the queries that read them, which already join `sale_items`.
 
 `sales.total_centavos` is resummed by `recalc_sale_totals` whenever a line
-moves, so a ticket never claims money the shop gave back.
+moves, so a ticket never claims money the shop has not earned or has given back.
+
+`finalize_payroll_period` **also** filters on `status = 'done'`. It previously
+filtered on nothing at all, so a finalized slip paid commission on refunded
+work — invisible because the Payroll tab's live view applies the reversal in
+TypeScript, so the screen and the slip it generated disagreed. Finalized slips
+are not retroactively recomputed; reopening the week is the deliberate act that
+does that.
+
+A line's **quantity, unit price, and crew** are edited through
+`edit_sale_item`, which recomputes the line total, its commission, and every
+crew share, then resums the header. Null arguments mean "leave it alone"; an
+explicit `p_employee_ids` replaces the crew wholesale. It never touches
+`commission_rate_bp` — the rate is snapshotted at sale time precisely so that
+editing a rate in Settings cannot rewrite history, and letting it be retyped
+per line would reopen that hole from the other side. Cashiers may edit today's
+sales only, the same reach `set_service_status` grants. See
+`supabase/migrations/20260820_edit_sale_item.sql`.
+
+Two fields on that modal are shown but **never editable**, for the same reason
+in both cases: they are the record of what happened. The commission rate is one.
+The **service name** is the other — it is what the receipt promised and what
+every per-service report counts, so renaming it in place would let a ₱1,000
+Package 4 quietly become a "Carwash" at the same price with nothing on the
+ticket showing the swap. The RPC still accepts `p_service_name`; neither client
+sends one. Rung up wrong is a **refund plus a re-ring**, which leaves both facts
+visible.
+
+The three fields that belong to the **car rather than the line** — payment
+method, vehicle name, plate number — are edited through `edit_sale_ticket`,
+a second RPC with the same shape and the same cashier-reaches-today guard.
+Payment method is the one that had to be fixable: nothing in either client
+could change it after Confirm, so a single mis-tap silently misfiled a whole
+ticket's revenue in the Reports payment breakdown and its filter. It is
+`security definer` for the same reason everything else here is — `sales` has an
+owner-only UPDATE policy, so a cashier's direct write matches zero rows, and a
+zero-row UPDATE is not an error. It never touches `vehicle_class`, `size`, or
+any money column: the class and size are the scale every line was priced
+against, so changing them is a re-ring, not an edit. Because both text columns
+are nullable, null cannot mean both "leave it alone" and "clear it" — the
+`p_clear_*` flags carry the second meaning, so a plate typed on the wrong car
+can actually be taken back off. Both clients open these inside the service-line
+modal rather than giving the ticket its own editor, and label them as applying
+to the whole car. See `supabase/migrations/20260820_edit_sale_ticket.sql`.
 
 Status is written **only** through the `set_service_status` RPC. `sale_items`
 has an owner-only UPDATE policy, so a cashier's direct write would match zero
@@ -409,6 +532,13 @@ adding a control. Two rules that are load-bearing:
   `Combobox` searches anywhere in the label and accepts `multiple`; `Select` is
   single-value and must not be overloaded. Do not hand-roll a chip row or a
   checkbox list where a `Combobox` belongs.
+- **`Modal` caps itself at the viewport and scrolls its own body.** The card is
+  `max-h-[calc(100dvh-2rem)]` and splits into three bands: title and footer hold
+  their place, only the middle scrolls. This lives in the shared component, not
+  in each dialog, because the failure it prevents is silent and total — the page
+  behind is `overflow-hidden`, so a dialog that grew past the screen put its
+  Save button below the bottom edge with nothing left to scroll. Do not remove
+  the cap, and do not let a dialog set its own height instead.
 
 Reference for palette and layout feel: the price board image the owner supplied.
 
@@ -418,12 +548,23 @@ A single tabbed shell, not separate routes-with-reloads. Tabs:
 
 1. **POS** — ring up a sale: pick vehicle class → size → service(s) → assign the
    crew → confirm total → save. Open-price services prompt for an amount.
-   Fast and touch-friendly; this is the most-used screen.
-2. **Services** — the record of work done: every car rung up on a day with its
-   service lines beneath it, each markable done or refunded in place. Grouped by
-   car, not a flat ledger, because the user is standing at a bay looking for a
-   specific vehicle. Built responsive — the owner reads the same screen on the
-   desktop and on a phone.
+   Fast and touch-friendly; this is the most-used screen. The cart captures an
+   optional **vehicle name** ("Toyota Vios") alongside the plate; both are free
+   text and both are optional.
+2. **Services** — the record of work done: every car rung up in a **span of
+   days** with its service lines beneath it, each markable done or refunded in
+   place. Grouped by car, not a flat ledger, because the user is standing at a
+   bay looking for a specific vehicle. Built responsive — the owner reads the
+   same screen on the desktop and on a phone.
+
+   Tapping a line opens a modal that edits its quantity, unit price, and crew
+   (`edit_sale_item`), plus the car's payment method, vehicle name, and plate
+   (`edit_sale_ticket`). The service name and the commission rate are shown
+   there but never editable. Lines can be **ticked for batch actions** — mark done, or delete —
+   with delete owner-only. Filterable by status and by **payment method**, and
+   exportable as a PDF that carries whatever filters are on screen. The date
+   range is owner-only: a cashier's RLS reaches today, so offering them a
+   picker would show an empty yesterday and read as "the shop had no sales".
 3. **Payroll** — Monday–Sunday week view per employee, showing sales worked and
    commission earned; finalize on Sunday and generate slips.
 4. **Expenses** — the day's operating costs (soap, water, electricity, a
@@ -431,9 +572,15 @@ A single tabbed shell, not separate routes-with-reloads. Tabs:
    required, description is optional. Grouped by the day spent.
 5. **Reports** — a dashboard. Two card rows: money (gross, expenses, net,
    average ticket, employee cut) and shop floor (vehicles / cars / motorcycles
-   served, work still in progress, refunds). Then best performing services,
-   sales by vehicle size, employee productivity, expense breakdown. Recharts,
-   black/red themed.
+   served, work still in progress with what it is worth, refunds). Then best
+   performing services, sales by vehicle size, employee productivity, **sales by
+   payment method**, expense breakdown. Recharts, black/red themed.
+
+   Filterable by **payment method**, which narrows every figure on the page and
+   is carried into the exported PDF (and named on its masthead, so a printed
+   sheet cannot be mistaken for an unfiltered one). The payment breakdown panel
+   is deliberately *not* narrowed — it is what the filter is chosen from, and
+   its rows toggle the filter on click.
 6. **Employees** — add/edit employees (name is the minimum; keep it simple).
 7. **Price Board** (`settings/`) — edit services, prices per size, package
    inclusions, commission rates; add new services and packages. Labelled for
@@ -489,6 +636,12 @@ Two things make a local build work, and both are Windows problems:
 cd /c/pb/mobile/android && ./gradlew assembleRelease --no-daemon
 # -> app/build/outputs/apk/release/app-release.apk
 ```
+
+**Bump `versionCode` in `mobile/app.json` on every release build.** Android
+refuses to install an APK whose `versionCode` is not higher than the installed
+one, so shipping a new `version` string alone produces an APK that every
+cashier's phone silently rejects with "app not installed". `version` is the
+human-readable name; `versionCode` is the integer Android actually compares.
 
 ### Signing
 
